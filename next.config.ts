@@ -10,6 +10,7 @@ const nextConfig: NextConfig = {
   },
   // Allow access to remote image placeholder.
   images: {
+    unoptimized: true, // GitHub Pages no soporta optimización de imágenes
     remotePatterns: [
       {
         protocol: 'https',
@@ -19,7 +20,8 @@ const nextConfig: NextConfig = {
       },
     ],
   },
-  output: 'standalone',
+  output: 'export',
+  basePath: '/centrologisticofrimaralV2',
   transpilePackages: ['motion'],
   webpack: (config, {dev}) => {
     // HMR is disabled in AI Studio via DISABLE_HMR env var.
