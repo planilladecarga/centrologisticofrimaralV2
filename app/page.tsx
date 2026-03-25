@@ -1,20 +1,31 @@
 'use client';
 
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import * as XLSX from 'xlsx';
+import { db } from '../lib/firebase';
+import { collection, onSnapshot, writeBatch, doc, getDocs } from 'firebase/firestore';
 
 export default function LogisticsDashboard() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [activeTab, setActiveTab] = useState('dashboard');
   const [inventoryData, setInventoryData] = useState<any[]>([]);
+  const [isUploading, setIsUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  useEffect(() => {
+    const unsubscribe = onSnapshot(collection(db, 'inventory'), (snapshot) => {
+      const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      setInventoryData(data);
+    });
+    return () => unsubscribe();
+  }, []);
+
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
     const reader = new FileReader();
-    reader.onload = (evt) => {
+    reader.onload = async (evt) => {
       const bstr = evt.target?.result;
       const wb = XLSX.read(bstr, { type: 'binary' });
       const wsname = wb.SheetNames[0];
@@ -48,10 +59,51 @@ export default function LogisticsDashboard() {
         };
       });
 
-      setInventoryData(mappedData);
-      // Reset input so the same file can be uploaded again if needed
-      if (fileInputRef.current) {
-        fileInputRef.current.value = '';
+      setIsUploading(true);
+      try {
+        // 1. Borrar inventario actual para reemplazarlo
+        const snapshot = await getDocs(collection(db, 'inventory'));
+        const deleteBatches = [];
+        let currentDeleteBatch = writeBatch(db);
+        let deleteCount = 0;
+        
+        snapshot.docs.forEach((document) => {
+          currentDeleteBatch.delete(document.ref);
+          deleteCount++;
+          if (deleteCount === 490) {
+            deleteBatches.push(currentDeleteBatch);
+            currentDeleteBatch = writeBatch(db);
+            deleteCount = 0;
+          }
+        });
+        if (deleteCount > 0) deleteBatches.push(currentDeleteBatch);
+        for (const batch of deleteBatches) await batch.commit();
+
+        // 2. Subir nuevo inventario
+        const addBatches = [];
+        let currentAddBatch = writeBatch(db);
+        let addCount = 0;
+
+        mappedData.forEach((item) => {
+          const newDocRef = doc(collection(db, 'inventory'));
+          currentAddBatch.set(newDocRef, item);
+          addCount++;
+          if (addCount === 490) {
+            addBatches.push(currentAddBatch);
+            currentAddBatch = writeBatch(db);
+            addCount = 0;
+          }
+        });
+        if (addCount > 0) addBatches.push(currentAddBatch);
+        for (const batch of addBatches) await batch.commit();
+
+      } catch (error) {
+        console.error("Error al subir a Firebase:", error);
+      } finally {
+        setIsUploading(false);
+        if (fileInputRef.current) {
+          fileInputRef.current.value = '';
+        }
       }
     };
     reader.readAsBinaryString(file);
@@ -233,12 +285,17 @@ export default function LogisticsDashboard() {
                   ref={fileInputRef}
                   className="hidden"
                   id="excel-upload"
+                  disabled={isUploading}
                 />
                 <label 
                   htmlFor="excel-upload"
-                  className="px-5 py-2.5 bg-neutral-900 text-white text-xs font-mono uppercase tracking-widest hover:bg-neutral-800 transition-colors cursor-pointer inline-block"
+                  className={`px-5 py-2.5 text-xs font-mono uppercase tracking-widest transition-colors inline-block ${
+                    isUploading 
+                      ? 'bg-neutral-400 text-white cursor-not-allowed' 
+                      : 'bg-neutral-900 text-white hover:bg-neutral-800 cursor-pointer'
+                  }`}
                 >
-                  [+] Cargar Excel
+                  {isUploading ? '[...] Subiendo a la Nube...' : '[+] Cargar Excel'}
                 </label>
               </div>
             </div>
