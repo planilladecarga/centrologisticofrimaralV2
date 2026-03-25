@@ -75,77 +75,71 @@ export default function LogisticsDashboard() {
       const ws = wb.Sheets[wsname];
       const rawData = XLSX.utils.sheet_to_json(ws, { header: 1 }) as any[][];
       
-      // Encontrar la fila de encabezados (la que tenga más coincidencias con nuestras palabras clave)
-      let headerRowIndex = 0;
-      let maxMatches = -1;
-      const keywords = ['cliente', 'numero', 'num', 'cod', 'pallet', 'producto', 'descrip', 'cantidad', 'kilo', 'peso', 'saldo', 'bulto', 'caja', 'articulo', 'item', 'unidad', 'kg'];
+      const mappedData: any[] = [];
+      let currentClienteNum = '-';
+      let currentClienteName = '-';
       
-      for (let i = 0; i < Math.min(20, rawData.length); i++) {
+      let colPallets = -1;
+      let colCajas = -1;
+      let colKilos = -1;
+      let colContenido = -1;
+      
+      for (let i = 0; i < rawData.length; i++) {
         const row = rawData[i];
-        if (!Array.isArray(row)) continue;
+        if (!Array.isArray(row) || row.length === 0) continue;
         
-        let matches = 0;
-        row.forEach(cell => {
-          if (typeof cell === 'string') {
-            const normalized = cell.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-            if (keywords.some(kw => normalized.includes(kw))) {
-              matches++;
-            }
+        const cell0 = String(row[0] || '').trim().toLowerCase();
+        const cell1 = String(row[1] || '').trim().toLowerCase();
+        const cell2 = String(row[2] || '').trim().toLowerCase();
+        
+        // Detectar fila de Cliente (ej: "Cliente:", "121", "UREXPORT S.A.")
+        if (cell0.includes('cliente') || cell0 === 'cliente:') {
+          currentClienteNum = String(row[1] || '-').trim();
+          currentClienteName = String(row[2] || '-').trim();
+          continue;
+        }
+        
+        // Ignorar filas de totales o metadatos
+        if (cell0.includes('totales') || cell1.includes('totales') || cell2.includes('totales')) continue;
+        if (cell0.includes('fecha') || cell0.includes('reporte')) continue;
+        
+        // Detectar fila de encabezados
+        const rowString = row.map(c => String(c || '').toLowerCase()).join(' ');
+        if (rowString.includes('pallets') && (rowString.includes('cajas') || rowString.includes('cantidad')) && (rowString.includes('kilos') || rowString.includes('peso'))) {
+          colPallets = row.findIndex(c => String(c || '').toLowerCase().includes('pallet'));
+          colCajas = row.findIndex(c => String(c || '').toLowerCase().includes('caja') || String(c || '').toLowerCase().includes('cantidad'));
+          colKilos = row.findIndex(c => String(c || '').toLowerCase().includes('kilo') || String(c || '').toLowerCase().includes('peso'));
+          colContenido = row.findIndex(c => String(c || '').toLowerCase().includes('contenido') || String(c || '').toLowerCase().includes('descrip') || String(c || '').toLowerCase().includes('producto') || String(c || '').toLowerCase().includes('articulo'));
+          continue;
+        }
+        
+        // Extraer datos si ya tenemos los encabezados identificados
+        if (colContenido !== -1 && colCajas !== -1) {
+          const producto = row[colContenido];
+          const cajas = row[colCajas];
+          
+          // Una fila válida debe tener un producto y una cantidad
+          if (producto && String(producto).trim() !== '' && cajas !== undefined && cajas !== '') {
+            const parseNumber = (val: any) => {
+              if (typeof val === 'number') return val;
+              if (!val) return 0;
+              // Manejar formato español "1.234,56" -> "1234.56"
+              const strVal = String(val).replace(/\./g, '').replace(/,/g, '.');
+              const num = parseFloat(strVal);
+              return isNaN(num) ? 0 : num;
+            };
+
+            mappedData.push({
+              cliente: currentClienteName,
+              numeroCliente: currentClienteNum,
+              producto: String(producto).trim(),
+              pallets: parseNumber(row[colPallets]),
+              cantidad: parseNumber(row[colCajas]),
+              kilos: parseNumber(row[colKilos])
+            });
           }
-        });
-        
-        if (matches > maxMatches) {
-          maxMatches = matches;
-          headerRowIndex = i;
         }
       }
-      
-      const headers = rawData[headerRowIndex] || [];
-      const rows = rawData.slice(headerRowIndex + 1);
-      
-      const mappedData = rows.map((rowArray: any[]) => {
-        const rowObj: any = {};
-        headers.forEach((header, index) => {
-          if (header) {
-            rowObj[String(header)] = rowArray[index];
-          }
-        });
-        
-        // Helper to find key ignoring case and accents
-        const findKey = (keyNames: string[]) => {
-          // First try exact match
-          let match = Object.keys(rowObj).find(k => {
-            const normalizedK = k.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
-            return keyNames.some(keyName => normalizedK === keyName);
-          });
-          if (match) return match;
-          
-          // Then try includes
-          return Object.keys(rowObj).find(k => {
-            const normalizedK = k.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-            return keyNames.some(keyName => normalizedK.includes(keyName));
-          });
-        };
-
-        const clienteKey = findKey(['razon social', 'nombre', 'cliente']);
-        const numClienteKey = findKey(['numero', 'num', 'codigo', 'cod', 'rut', 'nit']);
-        const palletsKey = findKey(['pallet', 'bulto', 'tarima', 'posicion']);
-        const productoKey = findKey(['producto', 'descrip', 'articulo', 'item', 'material']);
-        const cantidadKey = findKey(['cantidad', 'caja', 'und', 'unidad', 'saldo']);
-        const kilosKey = findKey(['kilo', 'peso', 'kg', 'volumen']);
-
-        // Si la fila está completamente vacía en cliente y producto, la ignoramos
-        if (!rowObj[clienteKey!] && !rowObj[productoKey!]) return null;
-
-        return {
-          cliente: clienteKey && rowObj[clienteKey] ? String(rowObj[clienteKey]) : '-',
-          numeroCliente: numClienteKey && rowObj[numClienteKey] ? String(rowObj[numClienteKey]) : '-',
-          pallets: palletsKey && rowObj[palletsKey] ? Number(rowObj[palletsKey]) || 0 : 0,
-          producto: productoKey && rowObj[productoKey] ? String(rowObj[productoKey]) : '-',
-          cantidad: cantidadKey && rowObj[cantidadKey] ? Number(rowObj[cantidadKey]) || 0 : 0,
-          kilos: kilosKey && rowObj[kilosKey] ? Number(rowObj[kilosKey]) || 0 : 0,
-        };
-      }).filter(Boolean); // Eliminar filas nulas/vacías
 
       setIsUploading(true);
       try {
