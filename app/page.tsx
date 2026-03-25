@@ -1,182 +1,361 @@
-import React from 'react';
-import { 
-  Package, 
-  Truck, 
-  Users, 
-  BarChart3, 
-  Settings, 
-  Bell, 
-  Search,
-  ArrowUpRight,
-  ArrowDownRight,
-  Clock
-} from 'lucide-react';
+'use client';
+
+import React, { useState, useRef } from 'react';
+import * as XLSX from 'xlsx';
 
 export default function LogisticsDashboard() {
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [activeTab, setActiveTab] = useState('dashboard');
+  const [inventoryData, setInventoryData] = useState<any[]>([]);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      const bstr = evt.target?.result;
+      const wb = XLSX.read(bstr, { type: 'binary' });
+      const wsname = wb.SheetNames[0];
+      const ws = wb.Sheets[wsname];
+      const data = XLSX.utils.sheet_to_json(ws);
+      
+      const mappedData = data.map((row: any) => {
+        // Helper to find key ignoring case and accents
+        const findKey = (keyName: string) => {
+          const normalizedKeyName = keyName.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+          return Object.keys(row).find(k => {
+            const normalizedK = k.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+            return normalizedK.includes(normalizedKeyName);
+          });
+        };
+
+        const clienteKey = findKey('cliente');
+        const numClienteKey = findKey('numero') || findKey('num');
+        const palletsKey = findKey('pallet');
+        const productoKey = findKey('producto');
+        const cantidadKey = findKey('cantidad');
+        const kilosKey = findKey('kilo');
+
+        return {
+          cliente: clienteKey ? row[clienteKey] : '-',
+          numeroCliente: numClienteKey ? row[numClienteKey] : '-',
+          pallets: palletsKey ? row[palletsKey] : 0,
+          producto: productoKey ? row[productoKey] : '-',
+          cantidad: cantidadKey ? row[cantidadKey] : 0,
+          kilos: kilosKey ? row[kilosKey] : 0,
+        };
+      });
+
+      setInventoryData(mappedData);
+      // Reset input so the same file can be uploaded again if needed
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
+    };
+    reader.readAsBinaryString(file);
+  };
+
   return (
-    <div className="min-h-screen bg-slate-50 flex text-slate-900 font-sans">
+    <div className="min-h-screen bg-neutral-100 flex text-neutral-900 font-sans selection:bg-neutral-900 selection:text-white">
       {/* Sidebar */}
-      <aside className="w-64 bg-slate-900 text-slate-300 flex flex-col">
-        <div className="p-6">
-          <h1 className="text-xl font-bold text-white flex items-center gap-2">
-            <Truck className="h-6 w-6 text-blue-500" />
-            Frimaral
-          </h1>
-          <p className="text-xs text-slate-500 mt-1">Centro Logístico</p>
+      <aside className="w-64 bg-neutral-950 text-neutral-400 flex flex-col border-r border-neutral-900">
+        <div className="p-6 border-b border-neutral-900">
+          <h1 className="text-xl font-mono tracking-widest text-white uppercase">Frimaral</h1>
+          <p className="text-[10px] font-mono uppercase tracking-widest mt-2 text-neutral-500">Centro Logístico</p>
         </div>
         
-        <nav className="flex-1 px-4 space-y-2 mt-4">
-          <a href="#" className="flex items-center gap-3 px-3 py-2 bg-blue-600 text-white rounded-lg">
-            <BarChart3 className="h-5 w-5" />
-            Panel Principal
-          </a>
-          <a href="#" className="flex items-center gap-3 px-3 py-2 hover:bg-slate-800 hover:text-white rounded-lg transition-colors">
-            <Package className="h-5 w-5" />
-            Inventario
-          </a>
-          <a href="#" className="flex items-center gap-3 px-3 py-2 hover:bg-slate-800 hover:text-white rounded-lg transition-colors">
-            <Truck className="h-5 w-5" />
-            Despachos
-          </a>
-          <a href="#" className="flex items-center gap-3 px-3 py-2 hover:bg-slate-800 hover:text-white rounded-lg transition-colors">
-            <Users className="h-5 w-5" />
-            Personal
-          </a>
+        <nav className="flex-1 py-6 space-y-1">
+          <button 
+            onClick={() => setActiveTab('dashboard')}
+            className={`w-full text-left px-6 py-3 text-xs font-mono uppercase tracking-widest transition-colors ${
+              activeTab === 'dashboard' 
+                ? 'text-white bg-neutral-900 border-l-2 border-white' 
+                : 'hover:text-white hover:bg-neutral-900 border-l-2 border-transparent'
+            }`}
+          >
+            01. Panel Principal
+          </button>
+          <button 
+            onClick={() => setActiveTab('inventory')}
+            className={`w-full text-left px-6 py-3 text-xs font-mono uppercase tracking-widest transition-colors ${
+              activeTab === 'inventory' 
+                ? 'text-white bg-neutral-900 border-l-2 border-white' 
+                : 'hover:text-white hover:bg-neutral-900 border-l-2 border-transparent'
+            }`}
+          >
+            02. Inventario
+          </button>
+          <button className="w-full text-left px-6 py-3 text-xs font-mono uppercase tracking-widest hover:text-white hover:bg-neutral-900 border-l-2 border-transparent transition-colors">
+            03. Despachos
+          </button>
+          <button className="w-full text-left px-6 py-3 text-xs font-mono uppercase tracking-widest hover:text-white hover:bg-neutral-900 border-l-2 border-transparent transition-colors">
+            04. Personal
+          </button>
         </nav>
 
-        <div className="p-4 border-t border-slate-800">
-          <a href="#" className="flex items-center gap-3 px-3 py-2 hover:bg-slate-800 hover:text-white rounded-lg transition-colors">
-            <Settings className="h-5 w-5" />
+        <div className="p-6 border-t border-neutral-900">
+          <button className="w-full text-left text-xs font-mono uppercase tracking-widest hover:text-white transition-colors">
             Configuración
-          </a>
+          </button>
         </div>
       </aside>
 
       {/* Main Content */}
-      <main className="flex-1 flex flex-col">
+      <main className="flex-1 flex flex-col relative">
         {/* Header */}
-        <header className="h-16 bg-white border-b border-slate-200 flex items-center justify-between px-8">
-          <div className="relative w-96">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+        <header className="h-14 bg-white border-b border-neutral-200 flex items-center justify-between px-8">
+          <div className="w-96">
             <input 
               type="text" 
-              placeholder="Buscar guías, productos o vehículos..." 
-              className="w-full pl-10 pr-4 py-2 bg-slate-100 border-transparent rounded-lg text-sm focus:bg-white focus:border-blue-500 focus:ring-2 focus:ring-blue-200 outline-none transition-all"
+              placeholder="BUSCAR REGISTRO, PLACA O GUÍA..." 
+              className="w-full py-1 text-xs font-mono uppercase bg-transparent border-b border-neutral-300 focus:border-neutral-900 outline-none transition-colors placeholder:text-neutral-400"
             />
           </div>
-          <div className="flex items-center gap-4">
-            <button className="relative p-2 text-slate-400 hover:text-slate-600 transition-colors">
-              <Bell className="h-5 w-5" />
-              <span className="absolute top-1 right-1 h-2 w-2 bg-red-500 rounded-full"></span>
-            </button>
-            <div className="h-8 w-8 bg-blue-100 text-blue-700 rounded-full flex items-center justify-center font-bold text-sm">
-              AD
+          <div className="flex items-center gap-6 text-xs font-mono uppercase tracking-widest">
+            <span className="text-neutral-500">Alertas: 0</span>
+            <div className="px-3 py-1 bg-neutral-900 text-white">
+              OP: ADMIN
             </div>
           </div>
         </header>
 
         {/* Dashboard Content */}
-        <div className="p-8 flex-1 overflow-auto">
-          <div className="flex justify-between items-end mb-8">
+        {activeTab === 'dashboard' && (
+          <div className="p-8 flex-1 overflow-auto">
+            <div className="flex justify-between items-end mb-8 border-b border-neutral-200 pb-6">
+              <div>
+                <h2 className="text-2xl font-light tracking-tight text-neutral-900 uppercase">Resumen Operativo</h2>
+                <p className="text-xs font-mono text-neutral-500 mt-2 uppercase tracking-widest">
+                  Actualizado: {new Date().toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit', year: 'numeric' })}
+                </p>
+              </div>
+              <button 
+                onClick={() => setIsModalOpen(true)}
+                className="px-5 py-2.5 bg-neutral-900 text-white text-xs font-mono uppercase tracking-widest hover:bg-neutral-800 transition-colors"
+              >
+                [+] Nuevo Registro
+              </button>
+            </div>
+
+            {/* Stats Grid */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-px bg-neutral-200 border border-neutral-200 mb-10">
+              <div className="bg-white p-8">
+                <p className="text-[10px] font-mono uppercase tracking-widest text-neutral-500 mb-4">Envíos en Tránsito</p>
+                <h3 className="text-5xl font-light tracking-tighter text-neutral-900">24</h3>
+                <div className="mt-6 text-[10px] font-mono text-neutral-500 uppercase tracking-widest border-t border-neutral-100 pt-4">
+                  <span>Variación: +12% vs ayer</span>
+                </div>
+              </div>
+
+              <div className="bg-white p-8">
+                <p className="text-[10px] font-mono uppercase tracking-widest text-neutral-500 mb-4">Carga Recibida (Ton)</p>
+                <h3 className="text-5xl font-light tracking-tighter text-neutral-900">142.5</h3>
+                <div className="mt-6 text-[10px] font-mono text-neutral-500 uppercase tracking-widest border-t border-neutral-100 pt-4">
+                  <span>Variación: -4% vs ayer</span>
+                </div>
+              </div>
+
+              <div className="bg-white p-8">
+                <p className="text-[10px] font-mono uppercase tracking-widest text-neutral-500 mb-4">Vehículos en Patio</p>
+                <h3 className="text-5xl font-light tracking-tighter text-neutral-900">08</h3>
+                <div className="mt-6 text-[10px] font-mono text-neutral-500 uppercase tracking-widest border-t border-neutral-100 pt-4">
+                  <span>Estado: 3 en espera de descarga</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Recent Activity Data Grid */}
             <div>
-              <h2 className="text-2xl font-bold text-slate-900">Resumen de Operaciones</h2>
-              <p className="text-slate-500 text-sm mt-1">Datos actualizados al día de hoy</p>
-            </div>
-            <button className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors">
-              + Nuevo Registro
-            </button>
-          </div>
-
-          {/* Stats Grid */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-            <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
-              <div className="flex justify-between items-start">
-                <div>
-                  <p className="text-sm font-medium text-slate-500">Envíos en Tránsito</p>
-                  <h3 className="text-3xl font-bold text-slate-900 mt-2">24</h3>
-                </div>
-                <div className="p-3 bg-blue-50 text-blue-600 rounded-lg">
-                  <Truck className="h-6 w-6" />
-                </div>
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-xs font-mono uppercase tracking-widest text-neutral-900">Registro de Actividad</h3>
+                <button className="text-[10px] font-mono uppercase tracking-widest text-neutral-500 hover:text-neutral-900 underline underline-offset-4">
+                  Ver Todo
+                </button>
               </div>
-              <div className="mt-4 flex items-center text-sm">
-                <ArrowUpRight className="h-4 w-4 text-emerald-500 mr-1" />
-                <span className="text-emerald-500 font-medium">12%</span>
-                <span className="text-slate-400 ml-2">vs ayer</span>
-              </div>
-            </div>
-
-            <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
-              <div className="flex justify-between items-start">
-                <div>
-                  <p className="text-sm font-medium text-slate-500">Carga Recibida (Ton)</p>
-                  <h3 className="text-3xl font-bold text-slate-900 mt-2">142.5</h3>
+              
+              <div className="border border-neutral-200 bg-white">
+                {/* Table Header */}
+                <div className="grid grid-cols-5 border-b border-neutral-200 bg-neutral-50 p-4 text-[10px] font-mono uppercase tracking-widest text-neutral-500">
+                  <div>ID Guía</div>
+                  <div>Operación</div>
+                  <div>Placa Vehículo</div>
+                  <div>Estado</div>
+                  <div className="text-right">Tiempo</div>
                 </div>
-                <div className="p-3 bg-emerald-50 text-emerald-600 rounded-lg">
-                  <Package className="h-6 w-6" />
-                </div>
-              </div>
-              <div className="mt-4 flex items-center text-sm">
-                <ArrowDownRight className="h-4 w-4 text-red-500 mr-1" />
-                <span className="text-red-500 font-medium">4%</span>
-                <span className="text-slate-400 ml-2">vs ayer</span>
-              </div>
-            </div>
-
-            <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
-              <div className="flex justify-between items-start">
-                <div>
-                  <p className="text-sm font-medium text-slate-500">Vehículos en Patio</p>
-                  <h3 className="text-3xl font-bold text-slate-900 mt-2">8</h3>
-                </div>
-                <div className="p-3 bg-amber-50 text-amber-600 rounded-lg">
-                  <Clock className="h-6 w-6" />
-                </div>
-              </div>
-              <div className="mt-4 flex items-center text-sm">
-                <span className="text-slate-500">3 esperando descarga</span>
-              </div>
-            </div>
-          </div>
-
-          {/* Recent Activity */}
-          <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
-            <div className="px-6 py-4 border-b border-slate-200">
-              <h3 className="font-semibold text-slate-900">Actividad Reciente</h3>
-            </div>
-            <div className="divide-y divide-slate-100">
-              {[
-                { id: 'GR-4029', type: 'Ingreso', status: 'Completado', time: 'Hace 10 min', truck: 'ABC-123' },
-                { id: 'GR-4030', type: 'Despacho', status: 'En Proceso', time: 'Hace 25 min', truck: 'XYZ-987' },
-                { id: 'GR-4031', type: 'Ingreso', status: 'Esperando', time: 'Hace 1 hora', truck: 'DEF-456' },
-              ].map((item, i) => (
-                <div key={i} className="px-6 py-4 flex items-center justify-between hover:bg-slate-50 transition-colors">
-                  <div className="flex items-center gap-4">
-                    <div className={`p-2 rounded-full ${
-                      item.type === 'Ingreso' ? 'bg-emerald-100 text-emerald-600' : 'bg-blue-100 text-blue-600'
-                    }`}>
-                      {item.type === 'Ingreso' ? <ArrowDownRight className="h-4 w-4" /> : <ArrowUpRight className="h-4 w-4" />}
+                
+                {/* Table Rows */}
+                <div className="divide-y divide-neutral-100">
+                  {[
+                    { id: 'GR-4029', type: 'INGRESO', status: 'COMPLETADO', time: '10 MIN', truck: 'ABC-123' },
+                    { id: 'GR-4030', type: 'DESPACHO', status: 'EN PROCESO', time: '25 MIN', truck: 'XYZ-987' },
+                    { id: 'GR-4031', type: 'INGRESO', status: 'ESPERANDO', time: '01 HOR', truck: 'DEF-456' },
+                    { id: 'GR-4032', type: 'DESPACHO', status: 'COMPLETADO', time: '02 HOR', truck: 'LMN-789' },
+                  ].map((item, i) => (
+                    <div key={i} className="grid grid-cols-5 p-4 text-xs font-mono uppercase tracking-wider text-neutral-900 hover:bg-neutral-50 transition-colors cursor-pointer">
+                      <div className="font-medium">{item.id}</div>
+                      <div>{item.type}</div>
+                      <div className="text-neutral-500">{item.truck}</div>
+                      <div>
+                        <span className={`px-2 py-1 ${
+                          item.status === 'COMPLETADO' ? 'bg-neutral-100 text-neutral-900' :
+                          item.status === 'EN PROCESO' ? 'border border-neutral-900 text-neutral-900' :
+                          'text-neutral-500 border border-neutral-300'
+                        }`}>
+                          {item.status}
+                        </span>
+                      </div>
+                      <div className="text-right text-neutral-500">{item.time}</div>
                     </div>
-                    <div>
-                      <p className="font-medium text-slate-900">{item.id}</p>
-                      <p className="text-sm text-slate-500">Placa: {item.truck}</p>
-                    </div>
-                  </div>
-                  <div className="text-right">
-                    <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
-                      item.status === 'Completado' ? 'bg-emerald-100 text-emerald-800' :
-                      item.status === 'En Proceso' ? 'bg-blue-100 text-blue-800' :
-                      'bg-amber-100 text-amber-800'
-                    }`}>
-                      {item.status}
-                    </span>
-                    <p className="text-sm text-slate-500 mt-1">{item.time}</p>
-                  </div>
+                  ))}
                 </div>
-              ))}
+              </div>
             </div>
           </div>
-        </div>
+        )}
+
+        {/* Inventory Content */}
+        {activeTab === 'inventory' && (
+          <div className="p-8 flex-1 overflow-auto flex flex-col">
+            <div className="flex justify-between items-end mb-8 border-b border-neutral-200 pb-6">
+              <div>
+                <h2 className="text-2xl font-light tracking-tight text-neutral-900 uppercase">Control de Inventario</h2>
+                <p className="text-xs font-mono text-neutral-500 mt-2 uppercase tracking-widest">
+                  Total Registros: {inventoryData.length}
+                </p>
+              </div>
+              <div>
+                <input 
+                  type="file" 
+                  accept=".xlsx, .xls, .csv" 
+                  onChange={handleFileUpload}
+                  ref={fileInputRef}
+                  className="hidden"
+                  id="excel-upload"
+                />
+                <label 
+                  htmlFor="excel-upload"
+                  className="px-5 py-2.5 bg-neutral-900 text-white text-xs font-mono uppercase tracking-widest hover:bg-neutral-800 transition-colors cursor-pointer inline-block"
+                >
+                  [+] Cargar Excel
+                </label>
+              </div>
+            </div>
+
+            {inventoryData.length === 0 ? (
+              <div className="flex-1 flex flex-col items-center justify-center border border-dashed border-neutral-300 bg-neutral-50 p-12 text-center">
+                <p className="text-sm font-mono uppercase tracking-widest text-neutral-500 mb-4">
+                  No hay datos en el inventario
+                </p>
+                <label 
+                  htmlFor="excel-upload"
+                  className="text-xs font-mono uppercase tracking-widest text-neutral-900 underline underline-offset-4 cursor-pointer hover:text-neutral-600"
+                >
+                  Cargar archivo .xlsx para comenzar
+                </label>
+              </div>
+            ) : (
+              <div className="border border-neutral-200 bg-white flex-1 overflow-hidden flex flex-col">
+                {/* Table Header */}
+                <div className="grid grid-cols-6 border-b border-neutral-200 bg-neutral-50 p-4 text-[10px] font-mono uppercase tracking-widest text-neutral-500">
+                  <div className="col-span-1">No. Cliente</div>
+                  <div className="col-span-1">Cliente</div>
+                  <div className="col-span-2">Producto</div>
+                  <div className="col-span-1 text-right">Pallets</div>
+                  <div className="col-span-1 text-right">Cantidad / Kilos</div>
+                </div>
+                
+                {/* Table Rows */}
+                <div className="divide-y divide-neutral-100 overflow-auto flex-1">
+                  {inventoryData.map((item, i) => (
+                    <div key={i} className="grid grid-cols-6 p-4 text-xs font-mono uppercase tracking-wider text-neutral-900 hover:bg-neutral-50 transition-colors">
+                      <div className="col-span-1 text-neutral-500">{item.numeroCliente}</div>
+                      <div className="col-span-1 font-medium truncate pr-4" title={item.cliente}>{item.cliente}</div>
+                      <div className="col-span-2 truncate pr-4" title={item.producto}>{item.producto}</div>
+                      <div className="col-span-1 text-right">{item.pallets}</div>
+                      <div className="col-span-1 text-right">
+                        <div>{item.cantidad} UND</div>
+                        <div className="text-[10px] text-neutral-500 mt-1">{item.kilos} KG</div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Modal Nuevo Registro */}
+        {isModalOpen && (
+          <div className="absolute inset-0 z-50 flex items-center justify-center bg-neutral-900/50 backdrop-blur-sm">
+            <div className="bg-white w-full max-w-2xl border border-neutral-200 shadow-2xl">
+              <div className="flex items-center justify-between p-6 border-b border-neutral-200 bg-neutral-50">
+                <h3 className="text-sm font-mono uppercase tracking-widest text-neutral-900">Nuevo Registro Operativo</h3>
+                <button 
+                  onClick={() => setIsModalOpen(false)}
+                  className="text-neutral-500 hover:text-neutral-900 font-mono text-xl leading-none"
+                >
+                  &times;
+                </button>
+              </div>
+              
+              <div className="p-8 space-y-6">
+                <div className="grid grid-cols-2 gap-6">
+                  <div className="space-y-2">
+                    <label className="block text-[10px] font-mono uppercase tracking-widest text-neutral-500">Tipo de Operación</label>
+                    <select className="w-full p-3 text-xs font-mono uppercase bg-neutral-50 border border-neutral-200 focus:border-neutral-900 outline-none transition-colors appearance-none">
+                      <option>INGRESO (RECEPCIÓN)</option>
+                      <option>DESPACHO (SALIDA)</option>
+                      <option>TRASLADO INTERNO</option>
+                    </select>
+                  </div>
+                  <div className="space-y-2">
+                    <label className="block text-[10px] font-mono uppercase tracking-widest text-neutral-500">Placa del Vehículo</label>
+                    <input 
+                      type="text" 
+                      placeholder="EJ: ABC-123" 
+                      className="w-full p-3 text-xs font-mono uppercase bg-neutral-50 border border-neutral-200 focus:border-neutral-900 outline-none transition-colors placeholder:text-neutral-400"
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <label className="block text-[10px] font-mono uppercase tracking-widest text-neutral-500">ID de Guía / Documento</label>
+                  <input 
+                    type="text" 
+                    placeholder="NÚMERO DE REFERENCIA" 
+                    className="w-full p-3 text-xs font-mono uppercase bg-neutral-50 border border-neutral-200 focus:border-neutral-900 outline-none transition-colors placeholder:text-neutral-400"
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <label className="block text-[10px] font-mono uppercase tracking-widest text-neutral-500">Observaciones</label>
+                  <textarea 
+                    rows={3}
+                    placeholder="DETALLES ADICIONALES DE LA CARGA O ESTADO DEL VEHÍCULO..." 
+                    className="w-full p-3 text-xs font-mono uppercase bg-neutral-50 border border-neutral-200 focus:border-neutral-900 outline-none transition-colors placeholder:text-neutral-400 resize-none"
+                  ></textarea>
+                </div>
+              </div>
+
+              <div className="flex items-center justify-end gap-4 p-6 border-t border-neutral-200 bg-neutral-50">
+                <button 
+                  onClick={() => setIsModalOpen(false)}
+                  className="px-5 py-2.5 text-xs font-mono uppercase tracking-widest text-neutral-500 hover:text-neutral-900 transition-colors"
+                >
+                  Cancelar
+                </button>
+                <button 
+                  onClick={() => setIsModalOpen(false)}
+                  className="px-5 py-2.5 bg-neutral-900 text-white text-xs font-mono uppercase tracking-widest hover:bg-neutral-800 transition-colors"
+                >
+                  Guardar Registro
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </main>
     </div>
   );
