@@ -10,7 +10,18 @@ export default function LogisticsDashboard() {
   const [activeTab, setActiveTab] = useState('dashboard');
   const [inventoryData, setInventoryData] = useState<any[]>([]);
   const [isUploading, setIsUploading] = useState(false);
+  const [isResetModalOpen, setIsResetModalOpen] = useState(false);
+  const [isResetting, setIsResetting] = useState(false);
+  const [toastMessage, setToastMessage] = useState<{text: string, type: 'success' | 'error'} | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Auto-hide toast after 3 seconds
+  useEffect(() => {
+    if (toastMessage) {
+      const timer = setTimeout(() => setToastMessage(null), 3000);
+      return () => clearTimeout(timer);
+    }
+  }, [toastMessage]);
 
   useEffect(() => {
     const unsubscribe = onSnapshot(collection(db, 'inventory'), (snapshot) => {
@@ -19,6 +30,36 @@ export default function LogisticsDashboard() {
     });
     return () => unsubscribe();
   }, []);
+
+  const handleResetDatabase = async () => {
+    setIsResetting(true);
+    try {
+      const snapshot = await getDocs(collection(db, 'inventory'));
+      const deleteBatches = [];
+      let currentDeleteBatch = writeBatch(db);
+      let deleteCount = 0;
+      
+      snapshot.docs.forEach((document) => {
+        currentDeleteBatch.delete(document.ref);
+        deleteCount++;
+        if (deleteCount === 490) {
+          deleteBatches.push(currentDeleteBatch);
+          currentDeleteBatch = writeBatch(db);
+          deleteCount = 0;
+        }
+      });
+      if (deleteCount > 0) deleteBatches.push(currentDeleteBatch);
+      for (const batch of deleteBatches) await batch.commit();
+      
+      setToastMessage({ text: "¡Base de datos reseteada a fábrica exitosamente!", type: 'success' });
+      setIsResetModalOpen(false);
+    } catch (error) {
+      console.error("Error al resetear la base de datos:", error);
+      setToastMessage({ text: "Error al resetear la base de datos. Revisa la consola.", type: 'error' });
+    } finally {
+      setIsResetting(false);
+    }
+  };
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -149,11 +190,11 @@ export default function LogisticsDashboard() {
         if (addCount > 0) addBatches.push(currentAddBatch);
         for (const batch of addBatches) await batch.commit();
         console.log("Subida completada con éxito.");
-        alert("¡Inventario actualizado correctamente en la nube!");
+        setToastMessage({ text: "¡Inventario actualizado correctamente en la nube!", type: 'success' });
 
       } catch (error) {
         console.error("Error crítico al subir a Firebase:", error);
-        alert("Hubo un error al subir los datos. Revisa la consola para más detalles.");
+        setToastMessage({ text: "Hubo un error al subir los datos. Revisa la consola para más detalles.", type: 'error' });
       } finally {
         setIsUploading(false);
         if (fileInputRef.current) {
@@ -165,7 +206,16 @@ export default function LogisticsDashboard() {
   };
 
   return (
-    <div className="min-h-screen bg-neutral-100 flex text-neutral-900 font-sans selection:bg-neutral-900 selection:text-white">
+    <div className="min-h-screen bg-neutral-100 flex text-neutral-900 font-sans selection:bg-neutral-900 selection:text-white relative">
+      {/* Toast Message */}
+      {toastMessage && (
+        <div className={`absolute top-4 right-4 z-50 px-6 py-3 shadow-lg text-xs font-mono uppercase tracking-widest ${
+          toastMessage.type === 'success' ? 'bg-green-600 text-white' : 'bg-red-600 text-white'
+        }`}>
+          {toastMessage.text}
+        </div>
+      )}
+
       {/* Sidebar */}
       <aside className="w-64 bg-neutral-950 text-neutral-400 flex flex-col border-r border-neutral-900">
         <div className="p-6 border-b border-neutral-900">
@@ -200,11 +250,21 @@ export default function LogisticsDashboard() {
           <button className="w-full text-left px-6 py-3 text-xs font-mono uppercase tracking-widest hover:text-white hover:bg-neutral-900 border-l-2 border-transparent transition-colors">
             04. Personal
           </button>
+          <button 
+            onClick={() => setActiveTab('configuracion')}
+            className={`w-full text-left px-6 py-3 text-xs font-mono uppercase tracking-widest transition-colors ${
+              activeTab === 'configuracion' 
+                ? 'text-white bg-neutral-900 border-l-2 border-white' 
+                : 'hover:text-white hover:bg-neutral-900 border-l-2 border-transparent'
+            }`}
+          >
+            05. Configuración
+          </button>
         </nav>
 
         <div className="p-6 border-t border-neutral-900">
           <button className="w-full text-left text-xs font-mono uppercase tracking-widest hover:text-white transition-colors">
-            Configuración
+            Ayuda / Soporte
           </button>
         </div>
       </aside>
@@ -395,6 +455,88 @@ export default function LogisticsDashboard() {
                 </div>
               </div>
             )}
+          </div>
+        )}
+
+        {/* Configuración Content */}
+        {activeTab === 'configuracion' && (
+          <div className="p-8 flex-1 overflow-auto flex flex-col">
+            <div className="mb-8 border-b border-neutral-200 pb-6">
+              <h2 className="text-2xl font-light tracking-tight text-neutral-900 uppercase">Configuración del Sistema</h2>
+              <p className="text-xs font-mono text-neutral-500 mt-2 uppercase tracking-widest">
+                Ajustes y mantenimiento de la plataforma
+              </p>
+            </div>
+
+            <div className="max-w-3xl">
+              <div className="border border-red-200 bg-red-50 p-8">
+                <h3 className="text-sm font-mono uppercase tracking-widest text-red-900 mb-2">Zona de Peligro</h3>
+                <p className="text-xs font-sans text-red-700 mb-6">
+                  Las acciones en esta sección son irreversibles. Por favor, procede con precaución.
+                </p>
+                
+                <div className="flex items-center justify-between border-t border-red-200 pt-6">
+                  <div>
+                    <h4 className="text-xs font-mono uppercase tracking-widest text-red-900">Reseteo Total de Fábrica</h4>
+                    <p className="text-xs font-sans text-red-700 mt-1">
+                      Borra toda la base de datos de inventario y deja la aplicación como nueva.
+                    </p>
+                  </div>
+                  <button 
+                    onClick={() => setIsResetModalOpen(true)}
+                    className="px-5 py-2.5 bg-red-600 text-white text-xs font-mono uppercase tracking-widest hover:bg-red-700 transition-colors"
+                  >
+                    Resetear Base de Datos
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Modal Reseteo */}
+        {isResetModalOpen && (
+          <div className="absolute inset-0 z-50 flex items-center justify-center bg-neutral-900/50 backdrop-blur-sm">
+            <div className="bg-white w-full max-w-md border border-neutral-200 shadow-2xl">
+              <div className="flex items-center justify-between p-6 border-b border-neutral-200 bg-red-50">
+                <h3 className="text-sm font-mono uppercase tracking-widest text-red-900">Confirmar Reseteo Total</h3>
+                <button 
+                  onClick={() => setIsResetModalOpen(false)}
+                  className="text-red-900 hover:text-red-700 font-mono text-xl leading-none"
+                  disabled={isResetting}
+                >
+                  &times;
+                </button>
+              </div>
+              
+              <div className="p-8">
+                <p className="text-sm font-sans text-neutral-700 mb-4">
+                  ¿Estás absolutamente seguro? Esta acción borrará <strong>TODOS</strong> los registros de inventario de forma permanente.
+                </p>
+                <p className="text-xs font-mono uppercase tracking-widest text-red-600">
+                  Esta acción no se puede deshacer.
+                </p>
+              </div>
+
+              <div className="flex items-center justify-end gap-4 p-6 border-t border-neutral-200 bg-neutral-50">
+                <button 
+                  onClick={() => setIsResetModalOpen(false)}
+                  className="px-5 py-2.5 text-xs font-mono uppercase tracking-widest text-neutral-500 hover:text-neutral-900 transition-colors"
+                  disabled={isResetting}
+                >
+                  Cancelar
+                </button>
+                <button 
+                  onClick={handleResetDatabase}
+                  disabled={isResetting}
+                  className={`px-5 py-2.5 text-white text-xs font-mono uppercase tracking-widest transition-colors ${
+                    isResetting ? 'bg-red-400 cursor-not-allowed' : 'bg-red-600 hover:bg-red-700'
+                  }`}
+                >
+                  {isResetting ? '[...] Borrando...' : 'Sí, Borrar Todo'}
+                </button>
+              </div>
+            </div>
           </div>
         )}
 
