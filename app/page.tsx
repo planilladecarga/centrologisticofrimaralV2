@@ -10,16 +10,7 @@ export default function LogisticsDashboard() {
   const [activeTab, setActiveTab] = useState('dashboard');
   const [inventoryData, setInventoryData] = useState<any[]>([]);
   const [isUploading, setIsUploading] = useState(false);
-  const [toastMessage, setToastMessage] = useState<{text: string, type: 'success' | 'error'} | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-
-  // Auto-hide toast after 3 seconds
-  useEffect(() => {
-    if (toastMessage) {
-      const timer = setTimeout(() => setToastMessage(null), 3000);
-      return () => clearTimeout(timer);
-    }
-  }, [toastMessage]);
 
   useEffect(() => {
     const unsubscribe = onSnapshot(collection(db, 'inventory'), (snapshot) => {
@@ -41,34 +32,79 @@ export default function LogisticsDashboard() {
       const wb = XLSX.read(bstr, { type: 'binary' });
       const wsname = wb.SheetNames[0];
       const ws = wb.Sheets[wsname];
-      const data = XLSX.utils.sheet_to_json(ws);
+      const rawData = XLSX.utils.sheet_to_json(ws, { header: 1 }) as any[][];
       
-      const mappedData = data.map((row: any) => {
+      // Encontrar la fila de encabezados (la que tenga más coincidencias con nuestras palabras clave)
+      let headerRowIndex = 0;
+      let maxMatches = -1;
+      const keywords = ['cliente', 'numero', 'num', 'cod', 'pallet', 'producto', 'descrip', 'cantidad', 'kilo', 'peso', 'saldo', 'bulto', 'caja', 'articulo', 'item', 'unidad', 'kg'];
+      
+      for (let i = 0; i < Math.min(20, rawData.length); i++) {
+        const row = rawData[i];
+        if (!Array.isArray(row)) continue;
+        
+        let matches = 0;
+        row.forEach(cell => {
+          if (typeof cell === 'string') {
+            const normalized = cell.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+            if (keywords.some(kw => normalized.includes(kw))) {
+              matches++;
+            }
+          }
+        });
+        
+        if (matches > maxMatches) {
+          maxMatches = matches;
+          headerRowIndex = i;
+        }
+      }
+      
+      const headers = rawData[headerRowIndex] || [];
+      const rows = rawData.slice(headerRowIndex + 1);
+      
+      const mappedData = rows.map((rowArray: any[]) => {
+        const rowObj: any = {};
+        headers.forEach((header, index) => {
+          if (header) {
+            rowObj[String(header)] = rowArray[index];
+          }
+        });
+        
         // Helper to find key ignoring case and accents
-        const findKey = (keyName: string) => {
-          const normalizedKeyName = keyName.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-          return Object.keys(row).find(k => {
+        const findKey = (keyNames: string[]) => {
+          // First try exact match
+          let match = Object.keys(rowObj).find(k => {
+            const normalizedK = k.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
+            return keyNames.some(keyName => normalizedK === keyName);
+          });
+          if (match) return match;
+          
+          // Then try includes
+          return Object.keys(rowObj).find(k => {
             const normalizedK = k.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-            return normalizedK.includes(normalizedKeyName);
+            return keyNames.some(keyName => normalizedK.includes(keyName));
           });
         };
 
-        const clienteKey = findKey('cliente');
-        const numClienteKey = findKey('numero') || findKey('num');
-        const palletsKey = findKey('pallet');
-        const productoKey = findKey('producto');
-        const cantidadKey = findKey('cantidad');
-        const kilosKey = findKey('kilo');
+        const clienteKey = findKey(['razon social', 'nombre', 'cliente']);
+        const numClienteKey = findKey(['numero', 'num', 'codigo', 'cod', 'rut', 'nit']);
+        const palletsKey = findKey(['pallet', 'bulto', 'tarima', 'posicion']);
+        const productoKey = findKey(['producto', 'descrip', 'articulo', 'item', 'material']);
+        const cantidadKey = findKey(['cantidad', 'caja', 'und', 'unidad', 'saldo']);
+        const kilosKey = findKey(['kilo', 'peso', 'kg', 'volumen']);
+
+        // Si la fila está completamente vacía en cliente y producto, la ignoramos
+        if (!rowObj[clienteKey!] && !rowObj[productoKey!]) return null;
 
         return {
-          cliente: clienteKey ? row[clienteKey] : '-',
-          numeroCliente: numClienteKey ? row[numClienteKey] : '-',
-          pallets: palletsKey ? row[palletsKey] : 0,
-          producto: productoKey ? row[productoKey] : '-',
-          cantidad: cantidadKey ? row[cantidadKey] : 0,
-          kilos: kilosKey ? row[kilosKey] : 0,
+          cliente: clienteKey && rowObj[clienteKey] ? String(rowObj[clienteKey]) : '-',
+          numeroCliente: numClienteKey && rowObj[numClienteKey] ? String(rowObj[numClienteKey]) : '-',
+          pallets: palletsKey && rowObj[palletsKey] ? Number(rowObj[palletsKey]) || 0 : 0,
+          producto: productoKey && rowObj[productoKey] ? String(rowObj[productoKey]) : '-',
+          cantidad: cantidadKey && rowObj[cantidadKey] ? Number(rowObj[cantidadKey]) || 0 : 0,
+          kilos: kilosKey && rowObj[kilosKey] ? Number(rowObj[kilosKey]) || 0 : 0,
         };
-      });
+      }).filter(Boolean); // Eliminar filas nulas/vacías
 
       setIsUploading(true);
       try {
@@ -113,11 +149,11 @@ export default function LogisticsDashboard() {
         if (addCount > 0) addBatches.push(currentAddBatch);
         for (const batch of addBatches) await batch.commit();
         console.log("Subida completada con éxito.");
-        setToastMessage({ text: "¡Inventario actualizado correctamente en la nube!", type: 'success' });
+        alert("¡Inventario actualizado correctamente en la nube!");
 
       } catch (error) {
         console.error("Error crítico al subir a Firebase:", error);
-        setToastMessage({ text: "Hubo un error al subir los datos. Revisa la consola.", type: 'error' });
+        alert("Hubo un error al subir los datos. Revisa la consola para más detalles.");
       } finally {
         setIsUploading(false);
         if (fileInputRef.current) {
@@ -129,16 +165,7 @@ export default function LogisticsDashboard() {
   };
 
   return (
-    <div className="min-h-screen bg-neutral-100 flex text-neutral-900 font-sans selection:bg-neutral-900 selection:text-white relative">
-      {/* Toast Message */}
-      {toastMessage && (
-        <div className={`absolute top-4 right-4 z-50 px-6 py-3 shadow-lg text-xs font-mono uppercase tracking-widest ${
-          toastMessage.type === 'success' ? 'bg-green-600 text-white' : 'bg-red-600 text-white'
-        }`}>
-          {toastMessage.text}
-        </div>
-      )}
-
+    <div className="min-h-screen bg-neutral-100 flex text-neutral-900 font-sans selection:bg-neutral-900 selection:text-white">
       {/* Sidebar */}
       <aside className="w-64 bg-neutral-950 text-neutral-400 flex flex-col border-r border-neutral-900">
         <div className="p-6 border-b border-neutral-900">
