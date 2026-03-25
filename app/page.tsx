@@ -61,7 +61,10 @@ export default function LogisticsDashboard() {
 
       setIsUploading(true);
       try {
+        console.log("Iniciando subida a Firebase...", mappedData.length, "filas");
+        
         // 1. Borrar inventario actual para reemplazarlo
+        console.log("Borrando inventario anterior...");
         const snapshot = await getDocs(collection(db, 'inventory'));
         const deleteBatches = [];
         let currentDeleteBatch = writeBatch(db);
@@ -78,8 +81,10 @@ export default function LogisticsDashboard() {
         });
         if (deleteCount > 0) deleteBatches.push(currentDeleteBatch);
         for (const batch of deleteBatches) await batch.commit();
+        console.log("Borrado completado.");
 
         // 2. Subir nuevo inventario
+        console.log("Subiendo nuevos datos...");
         const addBatches = [];
         let currentAddBatch = writeBatch(db);
         let addCount = 0;
@@ -96,9 +101,12 @@ export default function LogisticsDashboard() {
         });
         if (addCount > 0) addBatches.push(currentAddBatch);
         for (const batch of addBatches) await batch.commit();
+        console.log("Subida completada con éxito.");
+        alert("¡Inventario actualizado correctamente en la nube!");
 
       } catch (error) {
-        console.error("Error al subir a Firebase:", error);
+        console.error("Error crítico al subir a Firebase:", error);
+        alert("Hubo un error al subir los datos. Revisa la consola para más detalles.");
       } finally {
         setIsUploading(false);
         if (fileInputRef.current) {
