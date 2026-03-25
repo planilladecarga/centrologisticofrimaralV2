@@ -10,7 +10,16 @@ export default function LogisticsDashboard() {
   const [activeTab, setActiveTab] = useState('dashboard');
   const [inventoryData, setInventoryData] = useState<any[]>([]);
   const [isUploading, setIsUploading] = useState(false);
+  const [toastMessage, setToastMessage] = useState<{text: string, type: 'success' | 'error'} | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Auto-hide toast after 3 seconds
+  useEffect(() => {
+    if (toastMessage) {
+      const timer = setTimeout(() => setToastMessage(null), 3000);
+      return () => clearTimeout(timer);
+    }
+  }, [toastMessage]);
 
   useEffect(() => {
     const unsubscribe = onSnapshot(collection(db, 'inventory'), (snapshot) => {
@@ -104,11 +113,11 @@ export default function LogisticsDashboard() {
         if (addCount > 0) addBatches.push(currentAddBatch);
         for (const batch of addBatches) await batch.commit();
         console.log("Subida completada con éxito.");
-        alert("¡Inventario actualizado correctamente en la nube!");
+        setToastMessage({ text: "¡Inventario actualizado correctamente en la nube!", type: 'success' });
 
       } catch (error) {
         console.error("Error crítico al subir a Firebase:", error);
-        alert("Hubo un error al subir los datos. Revisa la consola para más detalles.");
+        setToastMessage({ text: "Hubo un error al subir los datos. Revisa la consola.", type: 'error' });
       } finally {
         setIsUploading(false);
         if (fileInputRef.current) {
@@ -120,7 +129,16 @@ export default function LogisticsDashboard() {
   };
 
   return (
-    <div className="min-h-screen bg-neutral-100 flex text-neutral-900 font-sans selection:bg-neutral-900 selection:text-white">
+    <div className="min-h-screen bg-neutral-100 flex text-neutral-900 font-sans selection:bg-neutral-900 selection:text-white relative">
+      {/* Toast Message */}
+      {toastMessage && (
+        <div className={`absolute top-4 right-4 z-50 px-6 py-3 shadow-lg text-xs font-mono uppercase tracking-widest ${
+          toastMessage.type === 'success' ? 'bg-green-600 text-white' : 'bg-red-600 text-white'
+        }`}>
+          {toastMessage.text}
+        </div>
+      )}
+
       {/* Sidebar */}
       <aside className="w-64 bg-neutral-950 text-neutral-400 flex flex-col border-r border-neutral-900">
         <div className="p-6 border-b border-neutral-900">
