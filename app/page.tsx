@@ -22,10 +22,12 @@ export default function LogisticsDashboard() {
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
+    console.log("Archivo seleccionado:", file?.name);
     if (!file) return;
 
     const reader = new FileReader();
     reader.onload = async (evt) => {
+      console.log("Leyendo archivo Excel...");
       const bstr = evt.target?.result;
       const wb = XLSX.read(bstr, { type: 'binary' });
       const wsname = wb.SheetNames[0];
