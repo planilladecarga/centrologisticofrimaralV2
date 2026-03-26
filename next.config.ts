@@ -20,8 +20,9 @@ const nextConfig: NextConfig = {
       },
     ],
   },
-  output: process.env.GITHUB_ACTIONS ? 'export' : undefined,
-  basePath: process.env.GITHUB_ACTIONS ? '/centrologisticofrimaralV2' : undefined,
+  output: undefined,
+  basePath: undefined,
+  allowedDevOrigins: ['*.replit.dev', '*.spock.replit.dev'],
   transpilePackages: ['motion'],
   webpack: (config, {dev}) => {
     // HMR is disabled in AI Studio via DISABLE_HMR env var.
