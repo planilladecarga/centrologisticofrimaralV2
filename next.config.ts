@@ -20,8 +20,8 @@ const nextConfig: NextConfig = {
       },
     ],
   },
-  output: undefined,
-  basePath: undefined,
+  output: process.env.GITHUB_ACTIONS ? 'export' : undefined,
+  basePath: process.env.GITHUB_ACTIONS ? '/centrologisticofrimaralV2' : undefined,
   allowedDevOrigins: ['*.replit.dev', '*.spock.replit.dev'],
   transpilePackages: ['motion'],
   webpack: (config, {dev}) => {
