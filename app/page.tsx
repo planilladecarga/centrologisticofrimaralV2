@@ -283,7 +283,15 @@ export default function LogisticsDashboard() {
         </header>
 
         {/* Dashboard Content */}
-        {activeTab === 'dashboard' && (
+        {activeTab === 'dashboard' && (() => {
+          const totalPallets = inventoryData.reduce((sum, item) => sum + (Number(item.pallets) || 0), 0);
+          const totalKilos = inventoryData.reduce((sum, item) => sum + (Number(item.kilos) || 0), 0);
+          const totalToneladas = (totalKilos / 1000).toFixed(1);
+          const totalClientes = new Set(inventoryData.map(item => item.numeroCliente).filter(Boolean)).size;
+          const totalProductos = inventoryData.length;
+          const recentItems = inventoryData.slice(0, 5);
+
+          return (
           <div className="p-8 flex-1 overflow-auto">
             <div className="flex justify-between items-end mb-8 border-b border-neutral-200 pb-6">
               <div>
@@ -303,78 +311,69 @@ export default function LogisticsDashboard() {
             {/* Stats Grid */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-px bg-neutral-200 border border-neutral-200 mb-10">
               <div className="bg-white p-8">
-                <p className="text-[10px] font-mono uppercase tracking-widest text-neutral-500 mb-4">Envíos en Tránsito</p>
-                <h3 className="text-5xl font-light tracking-tighter text-neutral-900">24</h3>
+                <p className="text-[10px] font-mono uppercase tracking-widest text-neutral-500 mb-4">Total Pallets en Stock</p>
+                <h3 className="text-5xl font-light tracking-tighter text-neutral-900">{totalPallets}</h3>
                 <div className="mt-6 text-[10px] font-mono text-neutral-500 uppercase tracking-widest border-t border-neutral-100 pt-4">
-                  <span>Variación: +12% vs ayer</span>
+                  <span>{totalProductos} productos registrados</span>
                 </div>
               </div>
 
               <div className="bg-white p-8">
-                <p className="text-[10px] font-mono uppercase tracking-widest text-neutral-500 mb-4">Carga Recibida (Ton)</p>
-                <h3 className="text-5xl font-light tracking-tighter text-neutral-900">142.5</h3>
+                <p className="text-[10px] font-mono uppercase tracking-widest text-neutral-500 mb-4">Carga en Bodega (Ton)</p>
+                <h3 className="text-5xl font-light tracking-tighter text-neutral-900">{totalToneladas}</h3>
                 <div className="mt-6 text-[10px] font-mono text-neutral-500 uppercase tracking-widest border-t border-neutral-100 pt-4">
-                  <span>Variación: -4% vs ayer</span>
+                  <span>{totalKilos.toLocaleString('es-CL')} kg totales</span>
                 </div>
               </div>
 
               <div className="bg-white p-8">
-                <p className="text-[10px] font-mono uppercase tracking-widest text-neutral-500 mb-4">Vehículos en Patio</p>
-                <h3 className="text-5xl font-light tracking-tighter text-neutral-900">08</h3>
+                <p className="text-[10px] font-mono uppercase tracking-widest text-neutral-500 mb-4">Clientes en Bodega</p>
+                <h3 className="text-5xl font-light tracking-tighter text-neutral-900">{String(totalClientes).padStart(2, '0')}</h3>
                 <div className="mt-6 text-[10px] font-mono text-neutral-500 uppercase tracking-widest border-t border-neutral-100 pt-4">
-                  <span>Estado: 3 en espera de descarga</span>
+                  <span>{totalProductos} líneas de inventario</span>
                 </div>
               </div>
             </div>
 
-            {/* Recent Activity Data Grid */}
+            {/* Recent Inventory */}
             <div>
               <div className="flex items-center justify-between mb-4">
-                <h3 className="text-xs font-mono uppercase tracking-widest text-neutral-900">Registro de Actividad</h3>
-                <button className="text-[10px] font-mono uppercase tracking-widest text-neutral-500 hover:text-neutral-900 underline underline-offset-4">
+                <h3 className="text-xs font-mono uppercase tracking-widest text-neutral-900">Últimos Registros de Inventario</h3>
+                <button onClick={() => setActiveTab('inventory')} className="text-[10px] font-mono uppercase tracking-widest text-neutral-500 hover:text-neutral-900 underline underline-offset-4">
                   Ver Todo
                 </button>
               </div>
               
               <div className="border border-neutral-200 bg-white">
-                {/* Table Header */}
-                <div className="grid grid-cols-5 border-b border-neutral-200 bg-neutral-50 p-4 text-[10px] font-mono uppercase tracking-widest text-neutral-500">
-                  <div>ID Guía</div>
-                  <div>Operación</div>
-                  <div>Placa Vehículo</div>
-                  <div>Estado</div>
-                  <div className="text-right">Tiempo</div>
+                <div className="grid grid-cols-4 border-b border-neutral-200 bg-neutral-50 p-4 text-[10px] font-mono uppercase tracking-widest text-neutral-500">
+                  <div>Cliente</div>
+                  <div className="col-span-2">Producto</div>
+                  <div className="text-right">Pallets / Kilos</div>
                 </div>
                 
-                {/* Table Rows */}
                 <div className="divide-y divide-neutral-100">
-                  {[
-                    { id: 'GR-4029', type: 'INGRESO', status: 'COMPLETADO', time: '10 MIN', truck: 'ABC-123' },
-                    { id: 'GR-4030', type: 'DESPACHO', status: 'EN PROCESO', time: '25 MIN', truck: 'XYZ-987' },
-                    { id: 'GR-4031', type: 'INGRESO', status: 'ESPERANDO', time: '01 HOR', truck: 'DEF-456' },
-                    { id: 'GR-4032', type: 'DESPACHO', status: 'COMPLETADO', time: '02 HOR', truck: 'LMN-789' },
-                  ].map((item, i) => (
-                    <div key={i} className="grid grid-cols-5 p-4 text-xs font-mono uppercase tracking-wider text-neutral-900 hover:bg-neutral-50 transition-colors cursor-pointer">
-                      <div className="font-medium">{item.id}</div>
-                      <div>{item.type}</div>
-                      <div className="text-neutral-500">{item.truck}</div>
-                      <div>
-                        <span className={`px-2 py-1 ${
-                          item.status === 'COMPLETADO' ? 'bg-neutral-100 text-neutral-900' :
-                          item.status === 'EN PROCESO' ? 'border border-neutral-900 text-neutral-900' :
-                          'text-neutral-500 border border-neutral-300'
-                        }`}>
-                          {item.status}
-                        </span>
-                      </div>
-                      <div className="text-right text-neutral-500">{item.time}</div>
+                  {inventoryData.length === 0 ? (
+                    <div className="p-8 text-center text-xs font-mono uppercase tracking-widest text-neutral-400">
+                      No hay datos — carga un archivo Excel en la sección Inventario
                     </div>
-                  ))}
+                  ) : (
+                    recentItems.map((item, i) => (
+                      <div key={i} className="grid grid-cols-4 p-4 text-xs font-mono uppercase tracking-wider text-neutral-900 hover:bg-neutral-50 transition-colors cursor-pointer">
+                        <div className="text-neutral-500 truncate pr-2" title={item.cliente}>{item.cliente || '-'}</div>
+                        <div className="col-span-2 truncate pr-4" title={item.producto}>{item.producto}</div>
+                        <div className="text-right">
+                          <div>{item.pallets} plt</div>
+                          <div className="text-[10px] text-neutral-500 mt-1">{item.kilos} kg</div>
+                        </div>
+                      </div>
+                    ))
+                  )}
                 </div>
               </div>
             </div>
           </div>
-        )}
+          );
+        })()}
 
         {/* Inventory Content */}
         {activeTab === 'inventory' && (
