@@ -22,6 +22,9 @@ const nextConfig: NextConfig = {
   },
   output: process.env.GITHUB_ACTIONS ? 'export' : undefined,
   basePath: process.env.GITHUB_ACTIONS ? '/centrologisticofrimaralV2' : undefined,
+  env: {
+    NEXT_PUBLIC_BASEPATH: process.env.GITHUB_ACTIONS ? '/centrologisticofrimaralV2' : '',
+  },
   allowedDevOrigins: ['*.replit.dev', '*.spock.replit.dev'],
   transpilePackages: ['motion'],
   webpack: (config, {dev}) => {
