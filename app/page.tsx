@@ -247,26 +247,20 @@ export default function LogisticsDashboard() {
     if (!file) return;
     setDespachosProcessing(true);
     try {
-      const pdfjsLib = await import('pdfjs-dist');
-      pdfjsLib.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.mjs`;
       const arrayBuffer = await file.arrayBuffer();
-      const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-      let fullText = '';
-      for (let i = 1; i <= pdf.numPages; i++) {
-        const page = await pdf.getPage(i);
-        const textContent = await page.getTextContent();
-        fullText += textContent.items.map((item: any) => ('str' in item ? item.str : '')).join(' ') + '\n';
+      const bytes = new Uint8Array(arrayBuffer);
+      let raw = '';
+      for (let i = 0; i < bytes.length; i++) {
+        const b = bytes[i];
+        raw += (b >= 32 && b < 127) ? String.fromCharCode(b) : (b === 10 || b === 13 ? '\n' : ' ');
       }
-      const oeMatch = fullText.match(/ORDEN DE EMBARQUE NRO\.\s+(\d+)/i);
+      const oeMatch = raw.match(/ORDEN\s+DE\s+EMBARQUE\s+NRO\.\s*(\d+)/i);
       if (oeMatch) setDespachosOE(oeMatch[1]);
-      const clienteMatch = fullText.match(/Nro\.\s*SE\s+Nro\.\s*SB[\s\S]{0,200}?([A-Z]{3,}(?:\s+[A-Z]{2,})*)/i);
-      if (clienteMatch && !despachosCliente) setDespachosCliente(clienteMatch[1]);
-
-      const palletLineRegex = /(\d{6})\s+(\d+)\s+([\d.,]+)/g;
+      const palletRegex = /(\d{6})\s+(\d+)\s+([\d.,]+)/g;
       const extractedPallets: Array<{numeroPallet: string; cajas: number; kilos: number; contenedor: string; producto: string; cliente: string; encontrado: boolean}> = [];
       const seen = new Set<string>();
       let match;
-      while ((match = palletLineRegex.exec(fullText)) !== null) {
+      while ((match = palletRegex.exec(raw)) !== null) {
         const numeroPallet = match[1];
         const num = parseInt(numeroPallet);
         if (!seen.has(numeroPallet) && num > 100000 && num < 9999999) {
@@ -281,14 +275,14 @@ export default function LogisticsDashboard() {
         }
       }
       if (extractedPallets.length === 0) {
-        setToastMessage({ text: 'No se encontraron pallets en el PDF. Usá entrada manual.', type: 'error' });
+        setToastMessage({ text: 'No se detectaron pallets. Usá la entrada manual.', type: 'error' });
       } else {
         await lookupPalletsInInventory(extractedPallets);
         setToastMessage({ text: `${extractedPallets.length} pallets detectados desde el PDF.`, type: 'success' });
       }
     } catch (error) {
       console.error('Error al leer PDF:', error);
-      setToastMessage({ text: 'Error al leer el PDF. Intentá la entrada manual.', type: 'error' });
+      setToastMessage({ text: 'Error al leer el PDF. Usá la entrada manual.', type: 'error' });
     } finally {
       setDespachosProcessing(false);
       if (pdfInputRef.current) pdfInputRef.current.value = '';
