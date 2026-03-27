@@ -15,6 +15,18 @@ export default function LogisticsDashboard() {
   const [toastMessage, setToastMessage] = useState<{text: string, type: 'success' | 'error'} | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  const [inventorySearch, setInventorySearch] = useState('');
+  const [expandedContainers, setExpandedContainers] = useState<Set<string>>(new Set());
+
+  const toggleContainer = (key: string) => {
+    setExpandedContainers(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+
   const [despachosInputMode, setDespachosInputMode] = useState<'pdf' | 'manual'>('pdf');
   const [despachosOE, setDespachosOE] = useState('');
   const [despachosCliente, setDespachosCliente] = useState('');
@@ -512,7 +524,7 @@ export default function LogisticsDashboard() {
         {/* Inventory Content */}
         {activeTab === 'inventory' && (
           <div className="p-8 flex-1 overflow-auto flex flex-col">
-            <div className="flex justify-between items-end mb-8 border-b border-neutral-200 pb-6">
+            <div className="flex justify-between items-end mb-6 border-b border-neutral-200 pb-6">
               <div>
                 <h2 className="text-2xl font-light tracking-tight text-neutral-900 uppercase">Control de Inventario</h2>
                 <p className="text-xs font-mono text-neutral-500 mt-2 uppercase tracking-widest">
@@ -520,68 +532,197 @@ export default function LogisticsDashboard() {
                 </p>
               </div>
               <div>
-                <input 
-                  type="file" 
-                  accept=".xlsx, .xls, .csv" 
-                  onChange={handleFileUpload}
-                  ref={fileInputRef}
-                  className="hidden"
-                  id="excel-upload"
-                  disabled={isUploading}
-                />
-                <label 
-                  htmlFor="excel-upload"
-                  className={`px-5 py-2.5 text-xs font-mono uppercase tracking-widest transition-colors inline-block ${
-                    isUploading 
-                      ? 'bg-neutral-400 text-white cursor-not-allowed' 
-                      : 'bg-neutral-900 text-white hover:bg-neutral-800 cursor-pointer'
-                  }`}
-                >
+                <input type="file" accept=".xlsx, .xls, .csv" onChange={handleFileUpload} ref={fileInputRef} className="hidden" id="excel-upload" disabled={isUploading} />
+                <label htmlFor="excel-upload" className={`px-5 py-2.5 text-xs font-mono uppercase tracking-widest transition-colors inline-block ${isUploading ? 'bg-neutral-400 text-white cursor-not-allowed' : 'bg-neutral-900 text-white hover:bg-neutral-800 cursor-pointer'}`}>
                   {isUploading ? '[...] Subiendo a la Nube...' : '[+] Cargar Excel'}
                 </label>
               </div>
             </div>
 
+            {/* Buscador de cliente */}
+            <div className="mb-6">
+              <input
+                type="text"
+                value={inventorySearch}
+                onChange={e => { setInventorySearch(e.target.value); setExpandedContainers(new Set()); }}
+                placeholder="Buscar por cliente o número de cliente..."
+                className="w-full p-3 text-xs font-mono bg-white border border-neutral-200 focus:border-neutral-900 outline-none transition-colors uppercase tracking-widest"
+              />
+            </div>
+
             {inventoryData.length === 0 ? (
               <div className="flex-1 flex flex-col items-center justify-center border border-dashed border-neutral-300 bg-neutral-50 p-12 text-center">
-                <p className="text-sm font-mono uppercase tracking-widest text-neutral-500 mb-4">
-                  No hay datos en el inventario
-                </p>
-                <label 
-                  htmlFor="excel-upload"
-                  className="text-xs font-mono uppercase tracking-widest text-neutral-900 underline underline-offset-4 cursor-pointer hover:text-neutral-600"
-                >
+                <p className="text-sm font-mono uppercase tracking-widest text-neutral-500 mb-4">No hay datos en el inventario</p>
+                <label htmlFor="excel-upload" className="text-xs font-mono uppercase tracking-widest text-neutral-900 underline underline-offset-4 cursor-pointer hover:text-neutral-600">
                   Cargar archivo .xlsx para comenzar
                 </label>
               </div>
-            ) : (
-              <div className="border border-neutral-200 bg-white flex-1 overflow-hidden flex flex-col">
-                {/* Table Header */}
-                <div className="grid grid-cols-6 border-b border-neutral-200 bg-neutral-50 p-4 text-[10px] font-mono uppercase tracking-widest text-neutral-500">
-                  <div className="col-span-1">No. Cliente</div>
-                  <div className="col-span-1">Cliente</div>
-                  <div className="col-span-2">Producto</div>
-                  <div className="col-span-1 text-right">Pallets</div>
-                  <div className="col-span-1 text-right">Cantidad / Kilos</div>
-                </div>
-                
-                {/* Table Rows */}
-                <div className="divide-y divide-neutral-100 overflow-auto flex-1">
-                  {inventoryData.map((item, i) => (
-                    <div key={i} className="grid grid-cols-6 p-4 text-xs font-mono uppercase tracking-wider text-neutral-900 hover:bg-neutral-50 transition-colors">
-                      <div className="col-span-1 text-neutral-500">{item.numeroCliente}</div>
-                      <div className="col-span-1 font-medium truncate pr-4" title={item.cliente}>{item.cliente}</div>
-                      <div className="col-span-2 truncate pr-4" title={item.producto}>{item.producto}</div>
-                      <div className="col-span-1 text-right">{item.pallets}</div>
-                      <div className="col-span-1 text-right">
-                        <div>{item.cantidad} UND</div>
-                        <div className="text-[10px] text-neutral-500 mt-1">{item.kilos} KG</div>
-                      </div>
+            ) : (() => {
+              const searchTerm = inventorySearch.trim().toLowerCase();
+              const filtered = searchTerm
+                ? inventoryData.filter(item =>
+                    (item.cliente || '').toLowerCase().includes(searchTerm) ||
+                    String(item.numeroCliente || '').includes(searchTerm)
+                  )
+                : inventoryData;
+
+              const hasIndividualPallets = filtered.some(item => item.numeroPallet);
+
+              if (!searchTerm || !hasIndividualPallets) {
+                // Vista plana (sin búsqueda o datos agregados)
+                return (
+                  <div className="border border-neutral-200 bg-white flex-1 overflow-hidden flex flex-col">
+                    <div className="grid grid-cols-6 border-b border-neutral-200 bg-neutral-50 p-4 text-[10px] font-mono uppercase tracking-widest text-neutral-500">
+                      <div className="col-span-1">No. Cliente</div>
+                      <div className="col-span-1">Cliente</div>
+                      <div className="col-span-2">Producto</div>
+                      <div className="col-span-1 text-right">Pallets</div>
+                      <div className="col-span-1 text-right">Cajas / Kilos</div>
                     </div>
-                  ))}
+                    <div className="divide-y divide-neutral-100 overflow-auto flex-1">
+                      {filtered.map((item, i) => (
+                        <div key={i} className="grid grid-cols-6 p-4 text-xs font-mono uppercase tracking-wider text-neutral-900 hover:bg-neutral-50 transition-colors">
+                          <div className="col-span-1 text-neutral-500">{item.numeroCliente}</div>
+                          <div className="col-span-1 font-medium truncate pr-4" title={item.cliente}>{item.cliente}</div>
+                          <div className="col-span-2 truncate pr-4" title={item.producto}>{item.producto}</div>
+                          <div className="col-span-1 text-right">{item.pallets}</div>
+                          <div className="col-span-1 text-right">
+                            <div>{item.cantidad} UND</div>
+                            <div className="text-[10px] text-neutral-500 mt-1">{item.kilos} KG</div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              }
+
+              // Vista agrupada por contenedor (datos individuales de pallet)
+              const sorted = [...filtered].sort((a, b) => {
+                const ca = (a.contenedor || 'SIN CONTENEDOR').toUpperCase();
+                const cb = (b.contenedor || 'SIN CONTENEDOR').toUpperCase();
+                if (ca !== cb) return ca.localeCompare(cb);
+                return String(a.numeroPallet || '').localeCompare(String(b.numeroPallet || ''));
+              });
+
+              const grouped: Record<string, typeof sorted> = {};
+              for (const item of sorted) {
+                const key = (item.contenedor || 'SIN CONTENEDOR').toUpperCase().trim();
+                if (!grouped[key]) grouped[key] = [];
+                grouped[key].push(item);
+              }
+
+              const clienteName = filtered[0]?.cliente || '';
+              const clienteNum = filtered[0]?.numeroCliente || '';
+              const totalPallets = filtered.length;
+              const totalCajas = filtered.reduce((s, i) => s + (Number(i.cantidad) || 0), 0);
+              const totalKilos = filtered.reduce((s, i) => s + (Number(i.kilos) || 0), 0);
+
+              return (
+                <div className="flex-1 overflow-auto flex flex-col gap-0">
+                  {/* Resumen del cliente */}
+                  <div className="border border-neutral-200 bg-neutral-50 p-4 mb-4 grid grid-cols-4 gap-4">
+                    <div>
+                      <div className="text-[10px] font-mono uppercase tracking-widest text-neutral-500">Cliente</div>
+                      <div className="text-sm font-mono font-medium uppercase mt-1">{clienteName}</div>
+                    </div>
+                    <div>
+                      <div className="text-[10px] font-mono uppercase tracking-widest text-neutral-500">Nro. Cliente</div>
+                      <div className="text-sm font-mono font-medium mt-1">{clienteNum}</div>
+                    </div>
+                    <div>
+                      <div className="text-[10px] font-mono uppercase tracking-widest text-neutral-500">Total Pallets</div>
+                      <div className="text-sm font-mono font-medium mt-1">{totalPallets}</div>
+                    </div>
+                    <div>
+                      <div className="text-[10px] font-mono uppercase tracking-widest text-neutral-500">Total Cajas / Kilos</div>
+                      <div className="text-sm font-mono font-medium mt-1">{totalCajas} UND / {totalKilos.toLocaleString('es-AR')} KG</div>
+                    </div>
+                  </div>
+
+                  {/* Contenedores */}
+                  {Object.entries(grouped).map(([contenedor, items]) => {
+                    const isOpen = expandedContainers.has(contenedor);
+                    const cTotal = items.reduce((s, i) => s + (Number(i.cantidad) || 0), 0);
+                    const kTotal = items.reduce((s, i) => s + (Number(i.kilos) || 0), 0);
+
+                    // Agrupar por producto dentro del contenedor para mostrar subtotales
+                    const byProducto: Record<string, typeof items> = {};
+                    for (const item of items) {
+                      const p = (item.producto || 'SIN PRODUCTO').toUpperCase().trim();
+                      if (!byProducto[p]) byProducto[p] = [];
+                      byProducto[p].push(item);
+                    }
+
+                    return (
+                      <div key={contenedor} className="border border-neutral-200 bg-white mb-2">
+                        {/* Header del contenedor */}
+                        <button
+                          onClick={() => toggleContainer(contenedor)}
+                          className="w-full flex items-center justify-between p-4 hover:bg-neutral-50 transition-colors text-left"
+                        >
+                          <div className="flex items-center gap-4">
+                            <span className="text-[10px] font-mono text-neutral-400">{isOpen ? '▼' : '▶'}</span>
+                            <span className="text-xs font-mono font-medium uppercase tracking-widest text-neutral-900">{contenedor}</span>
+                            <span className="text-[10px] font-mono text-neutral-500 bg-neutral-100 px-2 py-0.5">{items.length} pallets</span>
+                          </div>
+                          <div className="flex gap-6 text-[10px] font-mono text-neutral-500 uppercase tracking-widest">
+                            <span>{cTotal} cajas</span>
+                            <span>{kTotal.toLocaleString('es-AR')} kg</span>
+                          </div>
+                        </button>
+
+                        {/* Detalle expandido */}
+                        {isOpen && (
+                          <div className="border-t border-neutral-100">
+                            {/* Header de columnas */}
+                            <div className="grid grid-cols-12 px-6 py-2 bg-neutral-50 text-[10px] font-mono uppercase tracking-widest text-neutral-400 border-b border-neutral-100">
+                              <div className="col-span-2">Nro. Pallet</div>
+                              <div className="col-span-6">Producto</div>
+                              <div className="col-span-2 text-right">Cajas</div>
+                              <div className="col-span-2 text-right">Kilos</div>
+                            </div>
+
+                            {/* Filas por producto (con separador entre productos distintos) */}
+                            {Object.entries(byProducto).map(([producto, pallets], pi) => (
+                              <div key={producto}>
+                                {pi > 0 && <div className="border-t-2 border-neutral-200 mx-6" />}
+                                {/* Etiqueta del producto */}
+                                <div className="px-6 py-1.5 bg-neutral-50 border-b border-neutral-100">
+                                  <span className="text-[10px] font-mono uppercase tracking-widest text-neutral-600 font-medium">{producto}</span>
+                                </div>
+                                {/* Pallets del producto */}
+                                {pallets.sort((a, b) => String(a.numeroPallet || '').localeCompare(String(b.numeroPallet || ''))).map((item, j) => (
+                                  <div key={j} className="grid grid-cols-12 px-6 py-2.5 text-xs font-mono text-neutral-700 hover:bg-neutral-50 border-b border-neutral-50 last:border-0 transition-colors">
+                                    <div className="col-span-2 text-neutral-500">{item.numeroPallet || '—'}</div>
+                                    <div className="col-span-6 text-neutral-400 text-[10px] uppercase tracking-wider">{item.producto}</div>
+                                    <div className="col-span-2 text-right">{item.cantidad || '—'}</div>
+                                    <div className="col-span-2 text-right">{Number(item.kilos || 0).toLocaleString('es-AR')}</div>
+                                  </div>
+                                ))}
+                                {/* Subtotal por producto */}
+                                <div className="grid grid-cols-12 px-6 py-2 bg-neutral-50 border-t border-neutral-200 text-[10px] font-mono uppercase tracking-widest text-neutral-500">
+                                  <div className="col-span-8 font-medium">Subtotal {producto}</div>
+                                  <div className="col-span-2 text-right font-medium">{pallets.reduce((s, i) => s + (Number(i.cantidad) || 0), 0)}</div>
+                                  <div className="col-span-2 text-right font-medium">{pallets.reduce((s, i) => s + (Number(i.kilos) || 0), 0).toLocaleString('es-AR')}</div>
+                                </div>
+                              </div>
+                            ))}
+
+                            {/* Total del contenedor */}
+                            <div className="grid grid-cols-12 px-6 py-3 bg-neutral-900 text-[10px] font-mono uppercase tracking-widest text-white">
+                              <div className="col-span-8 font-medium">Total {contenedor}</div>
+                              <div className="col-span-2 text-right font-medium">{cTotal}</div>
+                              <div className="col-span-2 text-right font-medium">{kTotal.toLocaleString('es-AR')}</div>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
-              </div>
-            )}
+              );
+            })()}
           </div>
         )}
 
