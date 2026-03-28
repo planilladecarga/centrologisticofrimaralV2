@@ -2,8 +2,14 @@
 
 import React, { useState, useRef, useEffect } from 'react';
 import * as XLSX from 'xlsx';
+import * as pdfjsLib from 'pdfjs-dist';
 import { db } from '../lib/firebase';
 import { collection, onSnapshot, writeBatch, doc, getDocs } from 'firebase/firestore';
+
+// Configurar worker de PDF.js
+if (typeof window !== 'undefined') {
+  pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs';
+}
 
 export default function LogisticsDashboard() {
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -345,33 +351,61 @@ export default function LogisticsDashboard() {
     const file = e.target.files?.[0];
     if (!file) return;
     setPedidosProcessing(true);
+    
     try {
+      console.log('Leyendo PDF:', file.name);
+      
+      // Leer el archivo como ArrayBuffer
       const arrayBuffer = await file.arrayBuffer();
-      const bytes = new Uint8Array(arrayBuffer);
-      let raw = '';
-      for (let i = 0; i < bytes.length; i++) {
-        const b = bytes[i];
-        raw += (b >= 32 && b < 127) ? String.fromCharCode(b) : (b === 10 || b === 13 ? '\n' : ' ');
+      
+      // Cargar el PDF con pdf.js
+      const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+      console.log('PDF cargado, páginas:', pdf.numPages);
+      
+      let fullText = '';
+      
+      // Extraer texto de todas las páginas
+      for (let i = 1; i <= pdf.numPages; i++) {
+        const page = await pdf.getPage(i);
+        const textContent = await page.getTextContent();
+        const pageText = textContent.items
+          .map((item: any) => item.str)
+          .join(' ');
+        fullText += `\n--- PÁGINA ${i} ---\n${pageText}\n`;
       }
       
+      console.log('Texto extraído (primeros 1000 caracteres):', fullText.substring(0, 1000));
+      
       // Extraer número de OE
-      const oeMatch = raw.match(/ORDEN\s+DE\s+EMBARQUE\s+NRO\.\s*(\d+)/i);
-      if (oeMatch) setPedidosOE(oeMatch[1]);
+      const oeMatch = fullText.match(/ORDEN\s+DE\s+EMBARQUE\s+NRO\.?\s*(\d+)/i);
+      if (oeMatch) {
+        setPedidosOE(oeMatch[1]);
+        console.log('OE encontrado:', oeMatch[1]);
+      }
       
       // Extraer número de SB
-      const sbMatch = raw.match(/N[úu]mero\/[s]?\s*de\s*SB\s*(\d+)/i);
-      if (sbMatch) setPedidosSB(sbMatch[1]);
+      const sbMatch = fullText.match(/N[úu]mero\/?[s]?\s*de\s*SB[:\s]*(\d+)/i);
+      if (sbMatch) {
+        setPedidosSB(sbMatch[1]);
+        console.log('SB encontrado:', sbMatch[1]);
+      }
       
       // Extraer destino
-      const destinoMatch = raw.match(/Destino\s+([A-Z]+)/i);
-      if (destinoMatch) setPedidosDestino(destinoMatch[1]);
+      const destinoMatch = fullText.match(/Destino[:\s]+([A-Z]+)/i);
+      if (destinoMatch) {
+        setPedidosDestino(destinoMatch[1]);
+        console.log('Destino encontrado:', destinoMatch[1]);
+      }
       
-      // Extraer pallets de la tabla (formato: numero pallet - cajas - kilos)
-      const palletRegex = /(\d{6})\s+(\d+)\s+([\d.,]+)/g;
+      // Extraer pallets - múltiples patrones posibles
       const extractedPallets: Array<{numeroPallet: string; cajas: number; kilos: number; contenedor: string; producto: string; lote: string; cliente: string; encontrado: boolean}> = [];
       const seen = new Set<string>();
+      
+      // Patrón 1: numero pallet - cajas - kilos (formato común)
+      // Buscar secuencias de 6 dígitos seguidas de números
+      const palletRegex1 = /(\d{6})\s+(\d+)\s+([\d.,]+)/g;
       let match;
-      while ((match = palletRegex.exec(raw)) !== null) {
+      while ((match = palletRegex1.exec(fullText)) !== null) {
         const numeroPallet = match[1];
         const num = parseInt(numeroPallet);
         if (!seen.has(numeroPallet) && num > 100000 && num < 9999999) {
@@ -385,6 +419,26 @@ export default function LogisticsDashboard() {
           });
         }
       }
+      
+      // Patrón 2: Solo números de pallet de 6 dígitos (si no se encontraron con el patrón 1)
+      if (extractedPallets.length === 0) {
+        const palletRegex2 = /\b(\d{6})\b/g;
+        while ((match = palletRegex2.exec(fullText)) !== null) {
+          const numeroPallet = match[1];
+          const num = parseInt(numeroPallet);
+          if (!seen.has(numeroPallet) && num > 100000 && num < 9999999) {
+            seen.add(numeroPallet);
+            extractedPallets.push({
+              numeroPallet,
+              cajas: 0,
+              kilos: 0,
+              contenedor: '', producto: '', lote: '', cliente: '', encontrado: false
+            });
+          }
+        }
+      }
+      
+      console.log('Pallets extraídos:', extractedPallets.length);
       
       if (extractedPallets.length === 0) {
         setToastMessage({ text: 'No se detectaron pallets. Usá la entrada manual.', type: 'error' });
