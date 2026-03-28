@@ -116,19 +116,10 @@ export default function LogisticsDashboard() {
       const wsname = wb.SheetNames[0];
       const ws = wb.Sheets[wsname];
       const rawData = XLSX.utils.sheet_to_json(ws, { header: 1 }) as any[][];
-      
+
       const mappedData: any[] = [];
       let currentClienteNum = '-';
       let currentClienteName = '-';
-      
-      // Para el formato de STOCK (el más común)
-      // Columnas: Fec Com | Fec Ent | Contenedor | Pallets | Cajas | Kilos | Contenido | empty | Nro Lote | DUA | F. Venc. | L/E
-      const COL_CONTENEDOR = 2;
-      const COL_PALLETS = 3;
-      const COL_CAJAS = 4;
-      const COL_KILOS = 5;
-      const COL_CONTENIDO = 6;
-      const COL_LOTE = 8;
 
       const parseNumber = (val: any) => {
         if (typeof val === 'number') return val;
@@ -138,180 +129,131 @@ export default function LogisticsDashboard() {
         return isNaN(num) ? 0 : num;
       };
 
-      // Detectar el formato del archivo
-      let isStockFormat = false;
-      let foundHeader = false;
-      
-      for (let i = 0; i < Math.min(20, rawData.length); i++) {
+      // Función para encontrar el índice de columna por nombre (flexible)
+      const findColIndex = (headerRow: any[], keywords: string[]): number => {
+        for (let i = 0; i < headerRow.length; i++) {
+          const cell = String(headerRow[i] || '').toLowerCase().trim();
+          for (const kw of keywords) {
+            if (cell.includes(kw.toLowerCase())) return i;
+          }
+        }
+        return -1;
+      };
+
+      // PASO 1: Buscar la fila de encabezados (fila que contiene "Contenedor")
+      let headerRowIndex = -1;
+      let headerRow: any[] = [];
+
+      for (let i = 0; i < Math.min(30, rawData.length); i++) {
         const row = rawData[i];
         if (!Array.isArray(row)) continue;
         const rowStr = row.map(c => String(c || '').toLowerCase()).join(' ');
-        if (rowStr.includes('contenedor') && rowStr.includes('pallets') && rowStr.includes('cajas') && rowStr.includes('kilos')) {
-          isStockFormat = true;
-          foundHeader = true;
-          console.log("Detectado formato STOCK en fila", i);
-          break;
+        // Buscar fila con "contenedor" como encabezado
+        if (rowStr.includes('contenedor') && !rowStr.includes('cliente:')) {
+          // Verificar que no sea una fila de datos (debe tener múltiples columnas vacías o de encabezado)
+          const hasHeaderKeywords = rowStr.includes('pallet') || rowStr.includes('cajas') ||
+                                     rowStr.includes('kilos') || rowStr.includes('contenido') ||
+                                     rowStr.includes('lote');
+          if (hasHeaderKeywords) {
+            headerRowIndex = i;
+            headerRow = row;
+            console.log(`Encabezado encontrado en fila ${i}:`, row.slice(0, 12));
+            break;
+          }
         }
       }
-      
-      // También detectar formato Planilla de Carga
-      const headerRowPlanilla = rawData.find((row: any[]) => {
-        const rowStr = row.map(c => String(c || '').toLowerCase()).join(' ');
-        return rowStr.includes('contenedor') && rowStr.includes('bultos') && rowStr.includes('pallet id');
-      });
-      
-      const isPlanillaCarga = !!headerRowPlanilla && !isStockFormat;
-      
-      if (isStockFormat) {
-        // Formato de STOCK: Cliente: xxx, luego datos con Contenedor, Pallets (count), Cajas, Kilos, Contenido, Nro Lote
-        for (let i = 0; i < rawData.length; i++) {
+
+      // PASO 2: Detectar columnas dinámicamente
+      let colContenedor = -1;
+      let colPallets = -1;
+      let colCajas = -1;
+      let colKilos = -1;
+      let colContenido = -1;
+      let colLote = -1;
+      let colNroPallet = -1;
+
+      if (headerRow.length > 0) {
+        colContenedor = findColIndex(headerRow, ['contenedor']);
+        colPallets = findColIndex(headerRow, ['pallets', 'pallet']);
+        colCajas = findColIndex(headerRow, ['cajas', 'caja', 'bultos', 'bulto']);
+        colKilos = findColIndex(headerRow, ['kilos', 'kilo', 'peso', 'kg']);
+        colContenido = findColIndex(headerRow, ['contenido', 'descrip', 'producto', ' mercader']);
+        colLote = findColIndex(headerRow, ['lote', 'nro lote']);
+        colNroPallet = findColIndex(headerRow, ['pallet id', 'nro pallet', 'numero pallet']);
+
+        console.log("Columnas detectadas:", {
+          colContenedor, colPallets, colCajas, colKilos, colContenido, colLote, colNroPallet
+        });
+      }
+
+      // PASO 3: Detectar formato Planilla de Carga (tiene "bultos" en lugar de "cajas" y "pallet id")
+      const isPlanillaCarga = colCajas !== -1 &&
+        (String(headerRow[colCajas] || '').toLowerCase().includes('bulto') ||
+         colNroPallet !== -1);
+
+      console.log("Es formato Planilla de Carga:", isPlanillaCarga);
+
+      // PASO 4: Procesar los datos
+      if (colContenedor !== -1) {
+        // Procesar desde después del encabezado
+        for (let i = headerRowIndex + 1; i < rawData.length; i++) {
           const row = rawData[i];
-          if (!Array.isArray(row) || row.length === 0) continue;
-          
+          if (!Array.isArray(row) || row.length < 3) continue;
+
           const cell0 = String(row[0] || '').trim().toLowerCase();
-          const cell1 = String(row[1] || '').trim();
-          
-          // Detectar cambio de cliente
+          const cell1 = String(row[1] || '').trim().toLowerCase();
+          const cell2 = String(row[2] || '').trim().toLowerCase();
+
+          // Detectar cambio de cliente (formato: "Cliente: 123 NOMBRE")
           if (cell0 === 'cliente:') {
             currentClienteNum = String(row[1] || '-').trim();
             currentClienteName = String(row[2] || '-').trim();
             console.log(`Cliente detectado: ${currentClienteNum} - ${currentClienteName}`);
             continue;
           }
-          
-          // Saltar filas de metadata y totales
-          if (cell0.includes('fecha') || cell0.includes('reporte') || cell0.includes('fec com')) continue;
-          if (cell0 === 'nan' || cell0 === '') continue;
-          if (cell1.includes('totales')) continue;
-          
-          // Procesar fila de datos
-          const contenedor = String(row[COL_CONTENEDOR] || '').trim();
-          const pallets = parseNumber(row[COL_PALLETS]);
-          const cajas = parseNumber(row[COL_CAJAS]);
-          const kilos = parseNumber(row[COL_KILOS]);
-          const contenido = String(row[COL_CONTENIDO] || '').trim();
-          const lote = String(row[COL_LOTE] || '').trim();
-          
-          // Validar que tenga contenedor y datos
-          if (contenedor && contenedor.length > 3 && !contenedor.toLowerCase().includes('contenedor')) {
-            mappedData.push({
-              cliente: currentClienteName,
-              numeroCliente: currentClienteNum,
-              contenedor: contenedor.toUpperCase(),
-              producto: contenido,
-              lote: lote,
-              pallets: pallets,
-              cantidad: cajas,
-              kilos: kilos,
-            });
-          }
-        }
-      } else if (isPlanillaCarga && headerRowPlanilla) {
-        // Formato Planilla de Carga (con Pallet ID individual)
-        let colContenedor = headerRowPlanilla.findIndex(c => String(c || '').toLowerCase().includes('contenedor'));
-        let colCajas = headerRowPlanilla.findIndex(c => String(c || '').toLowerCase().includes('bultos'));
-        let colKilos = headerRowPlanilla.findIndex(c => String(c || '').toLowerCase().includes('peso'));
-        let colContenido = headerRowPlanilla.findIndex(c => String(c || '').toLowerCase().includes('descrip'));
-        let colNroPallet = headerRowPlanilla.findIndex(c => String(c || '').toLowerCase().includes('pallet') && String(c || '').toLowerCase().includes('id'));
-        if (colNroPallet === -1) colNroPallet = headerRowPlanilla.length - 1;
-        
-        for (let i = 0; i < rawData.length; i++) {
-          const row = rawData[i];
-          if (!Array.isArray(row) || row.length === 0) continue;
-          
-          const cell0 = String(row[0] || '').trim().toLowerCase();
-          
-          // Detectar cambio de cliente
-          if (cell0 === 'cliente:') {
-            currentClienteNum = String(row[1] || '-').trim();
-            currentClienteName = String(row[2] || '-').trim();
-            continue;
-          }
-          
-          // Saltar filas no válidas
-          if (cell0.includes('planilla') || cell0.includes('totales') || cell0.includes('resumen')) continue;
-          if (cell0.includes('fecha') || cell0.includes('reporte') || cell0.includes('cotes')) continue;
-          if (cell0.includes('contenedor') || cell0 === '') continue;
-          
-          const contenedor = String(row[colContenedor] || '').trim();
-          const descripcion = colContenido !== -1 ? String(row[colContenido] || '').trim() : '';
-          const palletId = colNroPallet !== -1 ? String(row[colNroPallet] || '').trim() : '';
-          const bultos = colCajas !== -1 ? parseNumber(row[colCajas]) : 0;
-          const peso = colKilos !== -1 ? parseNumber(row[colKilos]) : 0;
-          
-          // Solo procesar si tiene contenedor válido y pallet ID
-          if (contenedor && palletId && /^\d{5,8}$/.test(palletId)) {
-            const lote = extractLote(descripcion);
-            const productoLimpio = cleanProducto(descripcion);
-            
-            mappedData.push({
-              cliente: currentClienteName,
-              numeroCliente: currentClienteNum,
-              producto: productoLimpio || descripcion,
-              lote: lote,
-              pallets: 1,
-              cantidad: bultos,
-              kilos: peso,
-              numeroPallet: palletId,
-              contenedor: contenedor.toUpperCase(),
-            });
-          }
-        }
-      } else {
-        // Formato genérico anterior
-        let colPallets = -1;
-        let colCajas = -1;
-        let colKilos = -1;
-        let colContenido = -1;
-        let colNroPallet = -1;
-        let colContenedor = -1;
-        let colLote = -1;
-        
-        for (let i = 0; i < rawData.length; i++) {
-          const row = rawData[i];
-          if (!Array.isArray(row) || row.length === 0) continue;
-          
-          const cell0 = String(row[0] || '').trim().toLowerCase();
-          const cell1 = String(row[1] || '').trim().toLowerCase();
-          const cell2 = String(row[2] || '').trim().toLowerCase();
-          
-          if (cell0 === 'cliente:') {
-            currentClienteNum = String(row[1] || '-').trim();
-            currentClienteName = String(row[2] || '-').trim();
-            continue;
-          }
-          
+
+          // Saltar filas de totales, subtotales y metadata
           if (cell0.includes('totales') || cell1.includes('totales') || cell2.includes('totales')) continue;
-          if (cell0.includes('fecha') || cell0.includes('reporte')) continue;
-          
-          const rowString = row.map(c => String(c || '').toLowerCase()).join(' ');
-          
-          // Detectar encabezados
-          if (rowString.includes('contenedor') && (rowString.includes('pallet') || rowString.includes('cajas'))) {
-            colContenedor = row.findIndex(c => String(c || '').toLowerCase().includes('contenedor'));
-            colPallets = row.findIndex(c => String(c || '').toLowerCase() === 'pallets' || String(c || '').toLowerCase().includes('pallet'));
-            colCajas = row.findIndex(c => String(c || '').toLowerCase().includes('cajas') || String(c || '').toLowerCase().includes('caja'));
-            colKilos = row.findIndex(c => String(c || '').toLowerCase().includes('kilo') || String(c || '').toLowerCase().includes('peso'));
-            colContenido = row.findIndex(c => String(c || '').toLowerCase().includes('contenido') || String(c || '').toLowerCase().includes('descrip') || String(c || '').toLowerCase().includes('producto'));
-            colLote = row.findIndex(c => String(c || '').toLowerCase().includes('lote'));
-            continue;
-          }
-          
-          // Procesar datos
-          if (colContenedor !== -1) {
-            const contenedor = String(row[colContenedor] || '').trim();
-            const producto = colContenido !== -1 ? String(row[colContenido] || '').trim() : '';
-            const lote = colLote !== -1 ? String(row[colLote] || '').trim() : '';
-            const pallets = colPallets !== -1 ? parseNumber(row[colPallets]) : 1;
-            const cajas = colCajas !== -1 ? parseNumber(row[colCajas]) : 0;
-            const kilos = colKilos !== -1 ? parseNumber(row[colKilos]) : 0;
-            
-            if (contenedor && contenedor.length > 3) {
+          if (cell0.includes('subtotal') || cell1.includes('subtotal')) continue;
+          if (cell0.includes('fecha') && cell0.includes('corte')) continue;
+          if (cell0 === 'nan' || cell0 === '') continue;
+          // Saltar si es una fila de encabezado duplicada
+          if (cell0.includes('fec') && cell1.includes('fec')) continue;
+
+          // Extraer datos de las columnas detectadas
+          const contenedor = colContenedor !== -1 ? String(row[colContenedor] || '').trim() : '';
+          const pallets = colPallets !== -1 ? parseNumber(row[colPallets]) : 1;
+          const cajas = colCajas !== -1 ? parseNumber(row[colCajas]) : 0;
+          const kilos = colKilos !== -1 ? parseNumber(row[colKilos]) : 0;
+          const contenido = colContenido !== -1 ? String(row[colContenido] || '').trim() : '';
+          const lote = colLote !== -1 ? String(row[colLote] || '').trim() : '';
+          const palletId = colNroPallet !== -1 ? String(row[colNroPallet] || '').trim() : '';
+
+          // Validar que tenga contenedor válido
+          if (contenedor && contenedor.length > 2 && !contenedor.toLowerCase().includes('contenedor')) {
+            // Para formato Planilla de Carga, requerimos pallet ID válido
+            if (isPlanillaCarga && palletId) {
+              const loteExtraido = extractLote(contenido);
+              const productoLimpio = cleanProducto(contenido);
+
+              mappedData.push({
+                cliente: currentClienteName,
+                numeroCliente: currentClienteNum,
+                producto: productoLimpio || contenido,
+                lote: lote || loteExtraido,
+                pallets: 1,
+                cantidad: cajas,
+                kilos: kilos,
+                numeroPallet: palletId,
+                contenedor: contenedor.toUpperCase(),
+              });
+            } else if (!isPlanillaCarga) {
+              // Formato Stock normal
               mappedData.push({
                 cliente: currentClienteName,
                 numeroCliente: currentClienteNum,
                 contenedor: contenedor.toUpperCase(),
-                producto: producto,
+                producto: contenido,
                 lote: lote,
                 pallets: pallets,
                 cantidad: cajas,
@@ -325,6 +267,7 @@ export default function LogisticsDashboard() {
       console.log("Total registros mapeados:", mappedData.length);
       if (mappedData.length > 0) {
         console.log("Ejemplo primer registro:", mappedData[0]);
+        console.log("Ejemplo contenedores encontrados:", [...new Set(mappedData.slice(0, 20).map(d => d.contenedor))]);
       }
 
       setIsUploading(true);
