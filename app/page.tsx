@@ -27,11 +27,14 @@ export default function LogisticsDashboard() {
     });
   };
 
-  const [despachosInputMode, setDespachosInputMode] = useState<'pdf' | 'manual'>('pdf');
-  const [despachosOE, setDespachosOE] = useState('');
-  const [despachosCliente, setDespachosCliente] = useState('');
-  const [despachosPallets, setDespachosPallets] = useState<Array<{numeroPallet: string; cajas: number; kilos: number; contenedor: string; producto: string; cliente: string; encontrado: boolean}>>([]);
-  const [despachosProcessing, setDespachosProcessing] = useState(false);
+  // Estados para Pedidos
+  const [pedidosInputMode, setPedidosInputMode] = useState<'pdf' | 'manual'>('pdf');
+  const [pedidosOE, setPedidosOE] = useState('');
+  const [pedidosSB, setPedidosSB] = useState('');
+  const [pedidosDestino, setPedidosDestino] = useState('');
+  const [pedidosPallets, setPedidosPallets] = useState<Array<{numeroPallet: string; cajas: number; kilos: number; contenedor: string; producto: string; lote: string; cliente: string; encontrado: boolean}>>([]);
+  const [pedidosProcessing, setPedidosProcessing] = useState(false);
+  const [pedidosResultado, setPedidosResultado] = useState<{'contenedor': string; 'items': any[]}[]>([]);
   const [manualPalletInput, setManualPalletInput] = useState('');
   const pdfInputRef = useRef<HTMLInputElement>(null);
 
@@ -382,23 +385,23 @@ export default function LogisticsDashboard() {
     reader.readAsBinaryString(file);
   };
 
-  const lookupPalletsInInventory = async (pallets: Array<{numeroPallet: string; cajas: number; kilos: number; contenedor: string; producto: string; cliente: string; encontrado: boolean}>) => {
+  const lookupPalletsInInventory = async (pallets: Array<{numeroPallet: string; cajas: number; kilos: number; contenedor: string; producto: string; lote: string; cliente: string; encontrado: boolean}>) => {
     const snap = await getDocs(collection(db, 'inventory'));
     const items = snap.docs.map(d => ({ id: d.id, ...d.data() as any }));
     const enriched = pallets.map(pallet => {
       const found = items.find(item => String(item.numeroPallet || '').trim() === pallet.numeroPallet);
       if (found) {
-        return { ...pallet, contenedor: found.contenedor || '', producto: found.producto || '', cliente: found.cliente || '', encontrado: true };
+        return { ...pallet, contenedor: found.contenedor || '', producto: found.producto || '', lote: found.lote || '', cliente: found.cliente || '', encontrado: true };
       }
       return pallet;
     });
-    setDespachosPallets(enriched);
+    setPedidosPallets(enriched);
   };
 
   const handlePDFUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    setDespachosProcessing(true);
+    setPedidosProcessing(true);
     try {
       const arrayBuffer = await file.arrayBuffer();
       const bytes = new Uint8Array(arrayBuffer);
@@ -407,10 +410,22 @@ export default function LogisticsDashboard() {
         const b = bytes[i];
         raw += (b >= 32 && b < 127) ? String.fromCharCode(b) : (b === 10 || b === 13 ? '\n' : ' ');
       }
+      
+      // Extraer número de OE
       const oeMatch = raw.match(/ORDEN\s+DE\s+EMBARQUE\s+NRO\.\s*(\d+)/i);
-      if (oeMatch) setDespachosOE(oeMatch[1]);
+      if (oeMatch) setPedidosOE(oeMatch[1]);
+      
+      // Extraer número de SB
+      const sbMatch = raw.match(/N[úu]mero\/[s]?\s*de\s*SB\s*(\d+)/i);
+      if (sbMatch) setPedidosSB(sbMatch[1]);
+      
+      // Extraer destino
+      const destinoMatch = raw.match(/Destino\s+([A-Z]+)/i);
+      if (destinoMatch) setPedidosDestino(destinoMatch[1]);
+      
+      // Extraer pallets de la tabla (formato: numero pallet - cajas - kilos)
       const palletRegex = /(\d{6})\s+(\d+)\s+([\d.,]+)/g;
-      const extractedPallets: Array<{numeroPallet: string; cajas: number; kilos: number; contenedor: string; producto: string; cliente: string; encontrado: boolean}> = [];
+      const extractedPallets: Array<{numeroPallet: string; cajas: number; kilos: number; contenedor: string; producto: string; lote: string; cliente: string; encontrado: boolean}> = [];
       const seen = new Set<string>();
       let match;
       while ((match = palletRegex.exec(raw)) !== null) {
@@ -423,10 +438,11 @@ export default function LogisticsDashboard() {
             numeroPallet,
             cajas: parseInt(match[2]),
             kilos: parseFloat(kilosRaw),
-            contenedor: '', producto: '', cliente: '', encontrado: false
+            contenedor: '', producto: '', lote: '', cliente: '', encontrado: false
           });
         }
       }
+      
       if (extractedPallets.length === 0) {
         setToastMessage({ text: 'No se detectaron pallets. Usá la entrada manual.', type: 'error' });
       } else {
@@ -437,7 +453,7 @@ export default function LogisticsDashboard() {
       console.error('Error al leer PDF:', error);
       setToastMessage({ text: 'Error al leer el PDF. Usá la entrada manual.', type: 'error' });
     } finally {
-      setDespachosProcessing(false);
+      setPedidosProcessing(false);
       if (pdfInputRef.current) pdfInputRef.current.value = '';
     }
   };
@@ -445,38 +461,65 @@ export default function LogisticsDashboard() {
   const processManualPallets = async () => {
     const numbers = manualPalletInput.split(/[\s,;\n\-–]+/).map(s => s.trim()).filter(s => /^\d{5,8}$/.test(s));
     if (numbers.length === 0) { setToastMessage({ text: 'Ingresá al menos un número de pallet válido.', type: 'error' }); return; }
-    const pallets = numbers.map(n => ({ numeroPallet: n, cajas: 0, kilos: 0, contenedor: '', producto: '', cliente: '', encontrado: false }));
-    setDespachosProcessing(true);
+    const pallets = numbers.map(n => ({ numeroPallet: n, cajas: 0, kilos: 0, contenedor: '', producto: '', lote: '', cliente: '', encontrado: false }));
+    setPedidosProcessing(true);
     await lookupPalletsInInventory(pallets);
-    setDespachosProcessing(false);
+    setPedidosProcessing(false);
   };
 
-  const exportDespachosExcel = () => {
-    if (despachosPallets.length === 0) return;
-    const totalCajas = despachosPallets.reduce((s, p) => s + (p.cajas || 0), 0);
-    const totalKilos = despachosPallets.reduce((s, p) => s + (p.kilos || 0), 0);
+  const exportPedidosExcel = () => {
+    if (pedidosPallets.length === 0) return;
+    
+    // Agrupar por contenedor
+    const byContenedor: Record<string, typeof pedidosPallets> = {};
+    for (const p of pedidosPallets) {
+      const key = p.contenedor || 'SIN CONTENEDOR';
+      if (!byContenedor[key]) byContenedor[key] = [];
+      byContenedor[key].push(p);
+    }
+    
+    const totalCajas = pedidosPallets.reduce((s, p) => s + (p.cajas || 0), 0);
+    const totalKilos = pedidosPallets.reduce((s, p) => s + (p.kilos || 0), 0);
+    
     const wsData: any[][] = [
-      [`PLAN DE CARGA — ORDEN DE EMBARQUE NRO. ${despachosOE}`],
-      [`Cliente: ${despachosCliente}`, '', `Fecha: ${new Date().toLocaleDateString('es-ES')}`],
+      ['PLANILLA DE CARGA'],
       [],
-      ['Nro. Pallet', 'Cajas', 'Kilos', 'Contenedor', 'Producto', 'Cliente', 'Estado'],
-      ...despachosPallets.map(p => [
-        p.numeroPallet,
-        p.cajas || '',
-        p.kilos ? p.kilos.toFixed(2) : '',
-        p.contenedor || 'SIN ASIGNAR',
-        p.producto || '',
-        p.cliente || despachosCliente,
-        p.encontrado ? 'EN INVENTARIO' : 'NO ENCONTRADO'
-      ]),
-      [],
-      ['TOTALES', totalCajas, totalKilos.toFixed(2), '', '', '', `${despachosPallets.length} pallets`]
+      ['Contenedor', 'Cant.', 'Bultos', 'Peso', 'Descripción', '', 'Pallet ID']
     ];
+    
+    // Agregar filas por contenedor
+    let rowCount = 0;
+    for (const [contenedor, items] of Object.entries(byContenedor)) {
+      for (const item of items) {
+        rowCount++;
+        wsData.push([
+          contenedor,
+          1,
+          item.cajas || '',
+          item.kilos || '',
+          item.producto || '',
+          '',
+          item.numeroPallet
+        ]);
+      }
+      // Subtotal del contenedor
+      const subTotalCajas = items.reduce((s, i) => s + (i.cajas || 0), 0);
+      const subTotalKilos = items.reduce((s, i) => s + (i.kilos || 0), 0);
+      wsData.push(['', 'Totales:', '', subTotalCajas, subTotalKilos, '', '']);
+      wsData.push([]); // Fila vacía entre contenedores
+    }
+    
+    // Resumen total
+    wsData.push([]);
+    wsData.push(['', '', '', '', 'RESUMEN TOTAL (SOLO BUSCADOS)']);
+    wsData.push(['', '', '', '', 'TOTAL PALLETS', 'CAJAS', 'KG']);
+    wsData.push(['', '', '', '', pedidosPallets.length, totalCajas, totalKilos.toFixed(2)]);
+    
     const ws = XLSX.utils.aoa_to_sheet(wsData);
-    ws['!cols'] = [{ wch: 15 }, { wch: 8 }, { wch: 12 }, { wch: 18 }, { wch: 30 }, { wch: 20 }, { wch: 18 }];
+    ws['!cols'] = [{ wch: 18 }, { wch: 6 }, { wch: 8 }, { wch: 8 }, { wch: 50 }, { wch: 8 }, { wch: 12 }];
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Plan de Carga');
-    XLSX.writeFile(wb, `plan_de_carga_OE${despachosOE || 'nuevo'}_${new Date().toISOString().slice(0, 10)}.xlsx`);
+    XLSX.writeFile(wb, `plan_de_carga_OE${pedidosOE || 'nuevo'}_${new Date().toISOString().slice(0, 10)}.xlsx`);
   };
 
   return (
@@ -519,14 +562,14 @@ export default function LogisticsDashboard() {
             02. Inventario
           </button>
           <button 
-            onClick={() => setActiveTab('despachos')}
+            onClick={() => setActiveTab('pedidos')}
             className={`w-full text-left px-6 py-3 text-xs font-mono uppercase tracking-widest transition-colors ${
-              activeTab === 'despachos' 
+              activeTab === 'pedidos' 
                 ? 'text-white bg-neutral-900 border-l-2 border-white' 
                 : 'hover:text-white hover:bg-neutral-900 border-l-2 border-transparent'
             }`}
           >
-            03. Despachos
+            03. Pedidos
           </button>
           <button className="w-full text-left px-6 py-3 text-xs font-mono uppercase tracking-widest hover:text-white hover:bg-neutral-900 border-l-2 border-transparent transition-colors">
             04. Personal
@@ -856,55 +899,63 @@ export default function LogisticsDashboard() {
           </div>
         )}
 
-        {/* Despachos Content */}
-        {activeTab === 'despachos' && (
+        {/* Pedidos Content */}
+        {activeTab === 'pedidos' && (
           <div className="p-8 flex-1 overflow-auto flex flex-col">
             <div className="flex justify-between items-end mb-8 border-b border-neutral-200 pb-6">
               <div>
-                <h2 className="text-2xl font-light tracking-tight text-neutral-900 uppercase">Gestión de Despachos</h2>
+                <h2 className="text-2xl font-light tracking-tight text-neutral-900 uppercase">Gestión de Pedidos</h2>
                 <p className="text-xs font-mono text-neutral-500 mt-2 uppercase tracking-widest">
                   Orden de Embarque → Búsqueda de Pallets → Plan de Carga
                 </p>
               </div>
-              {despachosPallets.length > 0 && (
-                <button onClick={exportDespachosExcel} className="px-5 py-2.5 bg-neutral-900 text-white text-xs font-mono uppercase tracking-widest hover:bg-neutral-800 transition-colors">
+              {pedidosPallets.length > 0 && (
+                <button onClick={exportPedidosExcel} className="px-5 py-2.5 bg-neutral-900 text-white text-xs font-mono uppercase tracking-widest hover:bg-neutral-800 transition-colors">
                   [↓] Exportar Plan de Carga Excel
                 </button>
               )}
             </div>
 
             {/* Datos de la Orden */}
-            <div className="grid grid-cols-2 gap-4 mb-6">
+            <div className="grid grid-cols-4 gap-4 mb-6">
               <div>
                 <label className="block text-[10px] font-mono uppercase tracking-widest text-neutral-500 mb-1">Nro. Orden de Embarque</label>
-                <input type="text" value={despachosOE} onChange={e => setDespachosOE(e.target.value)} placeholder="Ej: 26416"
+                <input type="text" value={pedidosOE} onChange={e => setPedidosOE(e.target.value)} placeholder="Ej: 26332"
                   className="w-full p-3 text-xs font-mono bg-white border border-neutral-200 focus:border-neutral-900 outline-none transition-colors" />
               </div>
               <div>
-                <label className="block text-[10px] font-mono uppercase tracking-widest text-neutral-500 mb-1">Cliente</label>
-                <input type="text" value={despachosCliente} onChange={e => setDespachosCliente(e.target.value)} placeholder="Ej: San Jacinto"
+                <label className="block text-[10px] font-mono uppercase tracking-widest text-neutral-500 mb-1">Nro. SB</label>
+                <input type="text" value={pedidosSB} onChange={e => setPedidosSB(e.target.value)} placeholder="Ej: 40471"
                   className="w-full p-3 text-xs font-mono bg-white border border-neutral-200 focus:border-neutral-900 outline-none transition-colors" />
+              </div>
+              <div>
+                <label className="block text-[10px] font-mono uppercase tracking-widest text-neutral-500 mb-1">Destino</label>
+                <input type="text" value={pedidosDestino} onChange={e => setPedidosDestino(e.target.value)} placeholder="Ej: CONGO"
+                  className="w-full p-3 text-xs font-mono bg-white border border-neutral-200 focus:border-neutral-900 outline-none transition-colors" />
+              </div>
+              <div className="flex items-end">
+                <span className="text-xs font-mono text-neutral-400">Cliente: 10361 - NIREA SA</span>
               </div>
             </div>
 
             {/* Selector de modo */}
             <div className="flex gap-0 mb-6 border border-neutral-200 bg-white w-fit">
-              <button onClick={() => setDespachosInputMode('pdf')}
-                className={`px-6 py-2.5 text-xs font-mono uppercase tracking-widest transition-colors ${despachosInputMode === 'pdf' ? 'bg-neutral-900 text-white' : 'text-neutral-500 hover:text-neutral-900'}`}>
+              <button onClick={() => setPedidosInputMode('pdf')}
+                className={`px-6 py-2.5 text-xs font-mono uppercase tracking-widest transition-colors ${pedidosInputMode === 'pdf' ? 'bg-neutral-900 text-white' : 'text-neutral-500 hover:text-neutral-900'}`}>
                 [PDF] Subir Orden de Embarque
               </button>
-              <button onClick={() => setDespachosInputMode('manual')}
-                className={`px-6 py-2.5 text-xs font-mono uppercase tracking-widest transition-colors ${despachosInputMode === 'manual' ? 'bg-neutral-900 text-white' : 'text-neutral-500 hover:text-neutral-900'}`}>
+              <button onClick={() => setPedidosInputMode('manual')}
+                className={`px-6 py-2.5 text-xs font-mono uppercase tracking-widest transition-colors ${pedidosInputMode === 'manual' ? 'bg-neutral-900 text-white' : 'text-neutral-500 hover:text-neutral-900'}`}>
                 [Manual] Ingresar Pallets
               </button>
             </div>
 
             {/* Input PDF */}
-            {despachosInputMode === 'pdf' && (
+            {pedidosInputMode === 'pdf' && (
               <div className="mb-6">
-                <input type="file" accept=".pdf" onChange={handlePDFUpload} ref={pdfInputRef} className="hidden" id="pdf-upload" disabled={despachosProcessing} />
-                <label htmlFor="pdf-upload" className={`flex flex-col items-center justify-center border-2 border-dashed p-12 cursor-pointer transition-colors ${despachosProcessing ? 'border-neutral-200 bg-neutral-50 cursor-not-allowed' : 'border-neutral-300 hover:border-neutral-900 bg-white hover:bg-neutral-50'}`}>
-                  {despachosProcessing ? (
+                <input type="file" accept=".pdf" onChange={handlePDFUpload} ref={pdfInputRef} className="hidden" id="pdf-upload" disabled={pedidosProcessing} />
+                <label htmlFor="pdf-upload" className={`flex flex-col items-center justify-center border-2 border-dashed p-12 cursor-pointer transition-colors ${pedidosProcessing ? 'border-neutral-200 bg-neutral-50 cursor-not-allowed' : 'border-neutral-300 hover:border-neutral-900 bg-white hover:bg-neutral-50'}`}>
+                  {pedidosProcessing ? (
                     <p className="text-xs font-mono uppercase tracking-widest text-neutral-500">Procesando PDF...</p>
                   ) : (
                     <>
@@ -917,83 +968,132 @@ export default function LogisticsDashboard() {
             )}
 
             {/* Input Manual */}
-            {despachosInputMode === 'manual' && (
+            {pedidosInputMode === 'manual' && (
               <div className="mb-6 flex gap-4">
                 <div className="flex-1">
                   <label className="block text-[10px] font-mono uppercase tracking-widest text-neutral-500 mb-1">
                     Números de Pallet (separados por coma, espacio o línea)
                   </label>
                   <textarea value={manualPalletInput} onChange={e => setManualPalletInput(e.target.value)} rows={4}
-                    placeholder="292491, 292528, 292848&#10;293144 293221 293288&#10;..." 
+                    placeholder="286554, 287450, 288029&#10;288591 289450 290594&#10;..." 
                     className="w-full p-3 text-xs font-mono bg-white border border-neutral-200 focus:border-neutral-900 outline-none transition-colors resize-none" />
                 </div>
                 <div className="flex items-end">
-                  <button onClick={processManualPallets} disabled={despachosProcessing || !manualPalletInput.trim()}
+                  <button onClick={processManualPallets} disabled={pedidosProcessing || !manualPalletInput.trim()}
                     className="px-5 py-3 bg-neutral-900 text-white text-xs font-mono uppercase tracking-widest hover:bg-neutral-800 transition-colors disabled:bg-neutral-300 disabled:cursor-not-allowed">
-                    {despachosProcessing ? 'Buscando...' : 'Buscar'}
+                    {pedidosProcessing ? 'Buscando...' : 'Buscar'}
                   </button>
                 </div>
               </div>
             )}
 
             {/* Resultados */}
-            {despachosPallets.length > 0 && (
+            {pedidosPallets.length > 0 && (() => {
+              // Agrupar por contenedor
+              const byContenedor: Record<string, typeof pedidosPallets> = {};
+              for (const p of pedidosPallets) {
+                const key = p.contenedor || 'SIN CONTENEDOR';
+                if (!byContenedor[key]) byContenedor[key] = [];
+                byContenedor[key].push(p);
+              }
+              
+              const totalCajas = pedidosPallets.reduce((s, p) => s + (p.cajas || 0), 0);
+              const totalKilos = pedidosPallets.reduce((s, p) => s + (p.kilos || 0), 0);
+              const encontrados = pedidosPallets.filter(p => p.encontrado).length;
+              
+              return (
               <div>
                 {/* Resumen */}
-                <div className="grid grid-cols-3 gap-px bg-neutral-200 border border-neutral-200 mb-6">
+                <div className="grid grid-cols-4 gap-px bg-neutral-200 border border-neutral-200 mb-6">
                   <div className="bg-white p-4">
                     <p className="text-[10px] font-mono uppercase tracking-widest text-neutral-500">Total Pallets</p>
-                    <p className="text-2xl font-light mt-1">{despachosPallets.length}</p>
+                    <p className="text-2xl font-light mt-1">{pedidosPallets.length}</p>
                   </div>
                   <div className="bg-white p-4">
                     <p className="text-[10px] font-mono uppercase tracking-widest text-neutral-500">Total Cajas</p>
-                    <p className="text-2xl font-light mt-1">{despachosPallets.reduce((s, p) => s + (p.cajas || 0), 0).toLocaleString('es-CL')}</p>
+                    <p className="text-2xl font-light mt-1">{totalCajas.toLocaleString('es-AR')}</p>
                   </div>
                   <div className="bg-white p-4">
                     <p className="text-[10px] font-mono uppercase tracking-widest text-neutral-500">Total Kilos</p>
-                    <p className="text-2xl font-light mt-1">{despachosPallets.reduce((s, p) => s + (p.kilos || 0), 0).toLocaleString('es-CL', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</p>
+                    <p className="text-2xl font-light mt-1">{totalKilos.toFixed(2)}</p>
+                  </div>
+                  <div className="bg-white p-4">
+                    <p className="text-[10px] font-mono uppercase tracking-widest text-neutral-500">Encontrados</p>
+                    <p className="text-2xl font-light mt-1">{encontrados} / {pedidosPallets.length}</p>
                   </div>
                 </div>
 
-                {/* Tabla de Pallets */}
+                {/* Plan de Carga - Agrupado por Contenedor */}
                 <div className="border border-neutral-200 bg-white">
-                  <div className="grid grid-cols-6 border-b border-neutral-200 bg-neutral-50 p-4 text-[10px] font-mono uppercase tracking-widest text-neutral-500">
-                    <div>Nro. Pallet</div>
-                    <div className="text-right">Cajas</div>
-                    <div className="text-right">Kilos</div>
-                    <div>Contenedor</div>
-                    <div className="col-span-1">Producto</div>
-                    <div className="text-center">Estado</div>
+                  {/* Header de la planilla */}
+                  <div className="bg-neutral-900 text-white p-4">
+                    <h3 className="text-sm font-mono uppercase tracking-widest">PLANILLA DE CARGA</h3>
+                    <p className="text-[10px] font-mono text-neutral-400 mt-1">OE: {pedidosOE} | SB: {pedidosSB} | Destino: {pedidosDestino}</p>
                   </div>
-                  <div className="divide-y divide-neutral-100 max-h-96 overflow-auto">
-                    {despachosPallets.map((pallet, i) => (
-                      <div key={i} className="grid grid-cols-6 p-4 text-xs font-mono uppercase tracking-wider text-neutral-900 hover:bg-neutral-50 transition-colors">
-                        <div className="font-medium">{pallet.numeroPallet}</div>
-                        <div className="text-right">{pallet.cajas || '—'}</div>
-                        <div className="text-right text-neutral-600">{pallet.kilos ? pallet.kilos.toFixed(2) : '—'}</div>
-                        <div className="text-neutral-500">{pallet.contenedor || '—'}</div>
-                        <div className="text-neutral-500 truncate pr-2" title={pallet.producto}>{pallet.producto || '—'}</div>
-                        <div className="text-center">
-                          <span className={`px-2 py-1 text-[10px] ${pallet.encontrado ? 'bg-green-100 text-green-800' : 'border border-neutral-300 text-neutral-400'}`}>
-                            {pallet.encontrado ? 'EN STOCK' : 'NO ENCONTRADO'}
-                          </span>
+                  
+                  {/* Header de columnas */}
+                  <div className="grid grid-cols-12 px-4 py-2 bg-neutral-100 text-[10px] font-mono uppercase tracking-widest text-neutral-500 border-b border-neutral-200">
+                    <div className="col-span-2">Contenedor</div>
+                    <div className="col-span-1 text-center">Cant.</div>
+                    <div className="col-span-1 text-center">Bultos</div>
+                    <div className="col-span-1 text-center">Peso</div>
+                    <div className="col-span-5">Descripción</div>
+                    <div className="col-span-2 text-center">Pallet ID</div>
+                  </div>
+                  
+                  {/* Filas por contenedor */}
+                  {Object.entries(byContenedor).map(([contenedor, items]) => {
+                    const subTotalCajas = items.reduce((s, i) => s + (i.cajas || 0), 0);
+                    const subTotalKilos = items.reduce((s, i) => s + (i.kilos || 0), 0);
+                    
+                    return (
+                    <div key={contenedor}>
+                      {items.map((item, idx) => (
+                        <div key={idx} className={`grid grid-cols-12 px-4 py-2 text-xs font-mono border-b border-neutral-100 ${item.encontrado ? 'bg-green-50' : 'bg-white'}`}>
+                          <div className="col-span-2 font-medium">{idx === 0 ? contenedor : ''}</div>
+                          <div className="col-span-1 text-center">1</div>
+                          <div className="col-span-1 text-center">{item.cajas}</div>
+                          <div className="col-span-1 text-center">{item.kilos ? item.kilos.toFixed(0) : '—'}</div>
+                          <div className="col-span-5 truncate text-neutral-600" title={item.producto}>{item.producto || '—'}</div>
+                          <div className="col-span-2 text-center font-medium">{item.numeroPallet}</div>
                         </div>
+                      ))}
+                      {/* Subtotal del contenedor */}
+                      <div className="grid grid-cols-12 px-4 py-2 bg-neutral-50 text-[10px] font-mono uppercase tracking-widest text-neutral-600 border-b border-neutral-200">
+                        <div className="col-span-2"></div>
+                        <div className="col-span-1"></div>
+                        <div className="col-span-1 text-center font-medium">{subTotalCajas}</div>
+                        <div className="col-span-1 text-center font-medium">{subTotalKilos.toFixed(0)}</div>
+                        <div className="col-span-5"></div>
+                        <div className="col-span-2 text-center">{items.length} pallets</div>
                       </div>
-                    ))}
+                    </div>
+                    );
+                  })}
+                  
+                  {/* Total general */}
+                  <div className="grid grid-cols-12 px-4 py-3 bg-neutral-900 text-[10px] font-mono uppercase tracking-widest text-white">
+                    <div className="col-span-2 font-medium">TOTAL</div>
+                    <div className="col-span-1 text-center">{pedidosPallets.length}</div>
+                    <div className="col-span-1 text-center font-medium">{totalCajas}</div>
+                    <div className="col-span-1 text-center font-medium">{totalKilos.toFixed(2)}</div>
+                    <div className="col-span-5"></div>
+                    <div className="col-span-2"></div>
                   </div>
                 </div>
 
                 <div className="mt-4 flex justify-between items-center">
                   <p className="text-[10px] font-mono uppercase tracking-widest text-neutral-500">
-                    {despachosPallets.filter(p => p.encontrado).length} de {despachosPallets.length} encontrados en inventario
+                    {encontrados} de {pedidosPallets.length} encontrados en inventario
                   </p>
-                  <button onClick={() => { setDespachosPallets([]); setManualPalletInput(''); setDespachosOE(''); }}
+                  <button onClick={() => { setPedidosPallets([]); setManualPalletInput(''); setPedidosOE(''); setPedidosSB(''); setPedidosDestino(''); }}
                     className="text-[10px] font-mono uppercase tracking-widest text-neutral-500 hover:text-neutral-900 underline underline-offset-4">
                     Limpiar y nueva búsqueda
                   </button>
                 </div>
               </div>
-            )}
+              );
+            })()}
           </div>
         )}
 
