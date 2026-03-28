@@ -560,15 +560,19 @@ export default function LogisticsDashboard() {
             ) : (() => {
               const searchTerm = inventorySearch.trim().toLowerCase();
               const filtered = searchTerm
-                ? inventoryData.filter(item =>
-                    (item.cliente || '').toLowerCase().includes(searchTerm) ||
-                    String(item.numeroCliente || '').includes(searchTerm)
-                  )
+                ? inventoryData.filter(item => {
+                    const clienteLower = (item.cliente || '').toLowerCase();
+                    const numCliente = String(item.numeroCliente || '');
+                    const numClienteSinPunto = numCliente.replace(/\./g, '');
+                    return clienteLower.includes(searchTerm) ||
+                      numCliente.includes(searchTerm) ||
+                      numClienteSinPunto.includes(searchTerm);
+                  })
                 : inventoryData;
 
-              const hasIndividualPallets = filtered.some(item => item.numeroPallet);
+              const hasIndividualPallets = inventoryData.some(item => item.numeroPallet);
 
-              if (!searchTerm || !hasIndividualPallets) {
+              if (!hasIndividualPallets) {
                 // Vista plana (sin búsqueda o datos agregados)
                 return (
                   <div className="border border-neutral-200 bg-white flex-1 overflow-hidden flex flex-col">
@@ -612,23 +616,31 @@ export default function LogisticsDashboard() {
                 grouped[key].push(item);
               }
 
-              const clienteName = filtered[0]?.cliente || '';
-              const clienteNum = filtered[0]?.numeroCliente || '';
+              const uniqueClientes = [...new Set(filtered.map(i => i.cliente).filter(Boolean))];
               const totalPallets = filtered.length;
               const totalCajas = filtered.reduce((s, i) => s + (Number(i.cantidad) || 0), 0);
               const totalKilos = filtered.reduce((s, i) => s + (Number(i.kilos) || 0), 0);
+              const isSingleClient = searchTerm && uniqueClientes.length === 1;
 
               return (
                 <div className="flex-1 overflow-auto flex flex-col gap-0">
-                  {/* Resumen del cliente */}
+                  {/* Resumen */}
                   <div className="border border-neutral-200 bg-neutral-50 p-4 mb-4 grid grid-cols-4 gap-4">
                     <div>
-                      <div className="text-[10px] font-mono uppercase tracking-widest text-neutral-500">Cliente</div>
-                      <div className="text-sm font-mono font-medium uppercase mt-1">{clienteName}</div>
+                      <div className="text-[10px] font-mono uppercase tracking-widest text-neutral-500">
+                        {isSingleClient ? 'Cliente' : 'Clientes en vista'}
+                      </div>
+                      <div className="text-sm font-mono font-medium uppercase mt-1 truncate">
+                        {isSingleClient ? uniqueClientes[0] : `${uniqueClientes.length} clientes`}
+                      </div>
                     </div>
                     <div>
-                      <div className="text-[10px] font-mono uppercase tracking-widest text-neutral-500">Nro. Cliente</div>
-                      <div className="text-sm font-mono font-medium mt-1">{clienteNum}</div>
+                      <div className="text-[10px] font-mono uppercase tracking-widest text-neutral-500">
+                        {isSingleClient ? 'Nro. Cliente' : 'Contenedores'}
+                      </div>
+                      <div className="text-sm font-mono font-medium mt-1">
+                        {isSingleClient ? (filtered[0]?.numeroCliente || '—') : Object.keys(grouped).length}
+                      </div>
                     </div>
                     <div>
                       <div className="text-[10px] font-mono uppercase tracking-widest text-neutral-500">Total Pallets</div>
@@ -636,7 +648,7 @@ export default function LogisticsDashboard() {
                     </div>
                     <div>
                       <div className="text-[10px] font-mono uppercase tracking-widest text-neutral-500">Total Cajas / Kilos</div>
-                      <div className="text-sm font-mono font-medium mt-1">{totalCajas} UND / {totalKilos.toLocaleString('es-AR')} KG</div>
+                      <div className="text-sm font-mono font-medium mt-1">{totalCajas.toLocaleString('es-AR')} / {totalKilos.toLocaleString('es-AR')} KG</div>
                     </div>
                   </div>
 
