@@ -81,6 +81,25 @@ export default function LogisticsDashboard() {
     }
   };
 
+  // Función para extraer el lote de la descripción del producto
+  const extractLote = (descripcion: string): string => {
+    if (!descripcion) return '';
+    // Buscar patrones de lote al final: PXXXXX o COTE PXXXXX
+    const loteMatch = descripcion.match(/(?:COTE\s*)?(P\d{5,6})\s*$/i);
+    if (loteMatch) return loteMatch[1].toUpperCase();
+    // También buscar CPTE PXXXXX
+    const cpteMatch = descripcion.match(/(?:CPTE\s*)?(P\d{5,6})\s*$/i);
+    if (cpteMatch) return cpteMatch[1].toUpperCase();
+    return '';
+  };
+
+  // Función para limpiar el producto (quitar el lote del final)
+  const cleanProducto = (descripcion: string): string => {
+    if (!descripcion) return '';
+    // Quitar el lote del final
+    return descripcion.replace(/\s*(?:COTE|CPTE)?\s*P\d{5,6}\s*$/i, '').trim();
+  };
+
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     console.log("Archivo seleccionado:", file?.name);
@@ -105,6 +124,7 @@ export default function LogisticsDashboard() {
       let colContenido = -1;
       let colNroPallet = -1;
       let colContenedor = -1;
+      let isPlanillaCarga = false;
 
       const parseNumber = (val: any) => {
         if (typeof val === 'number') return val;
@@ -113,6 +133,22 @@ export default function LogisticsDashboard() {
         const num = parseFloat(strVal);
         return isNaN(num) ? 0 : num;
       };
+
+      // Detectar si es formato Planilla de Carga (Contenedor, Cant., Bultos, Peso, Descripción, Pallet ID)
+      const headerRow = rawData.find((row: any[]) => {
+        const rowStr = row.map(c => String(c || '').toLowerCase()).join(' ');
+        return rowStr.includes('contenedor') && rowStr.includes('bultos') && rowStr.includes('pallet');
+      });
+      
+      if (headerRow) {
+        isPlanillaCarga = true;
+        colContenedor = headerRow.findIndex(c => String(c || '').toLowerCase().includes('contenedor'));
+        colCajas = headerRow.findIndex(c => String(c || '').toLowerCase().includes('bultos'));
+        colKilos = headerRow.findIndex(c => String(c || '').toLowerCase().includes('peso'));
+        colContenido = headerRow.findIndex(c => String(c || '').toLowerCase().includes('descrip'));
+        colNroPallet = headerRow.findIndex(c => String(c || '').toLowerCase().includes('pallet') && String(c || '').toLowerCase().includes('id'));
+        if (colNroPallet === -1) colNroPallet = headerRow.length - 1; // Última columna suele ser Pallet ID
+      }
       
       for (let i = 0; i < rawData.length; i++) {
         const row = rawData[i];
@@ -121,6 +157,39 @@ export default function LogisticsDashboard() {
         const cell0 = String(row[0] || '').trim().toLowerCase();
         const cell1 = String(row[1] || '').trim().toLowerCase();
         const cell2 = String(row[2] || '').trim().toLowerCase();
+        
+        // Saltar encabezados y filas vacías
+        if (cell0.includes('planilla') || cell0.includes('totales') || cell0.includes('resumen')) continue;
+        if (cell0.includes('fecha') || cell0.includes('reporte') || cell0.includes('cotes')) continue;
+        if (isPlanillaCarga && (cell0.includes('contenedor') || cell0 === '')) continue;
+        
+        // Formato Planilla de Carga
+        if (isPlanillaCarga && colContenedor !== -1) {
+          const contenedor = String(row[colContenedor] || '').trim();
+          const descripcion = colContenido !== -1 ? String(row[colContenido] || '').trim() : '';
+          const palletId = colNroPallet !== -1 ? String(row[colNroPallet] || '').trim() : '';
+          const bultos = colCajas !== -1 ? parseNumber(row[colCajas]) : 0;
+          const peso = colKilos !== -1 ? parseNumber(row[colKilos]) : 0;
+          
+          // Solo procesar si tiene contenedor válido y pallet ID
+          if (contenedor && palletId && /^\d{5,8}$/.test(palletId)) {
+            const lote = extractLote(descripcion);
+            const productoLimpio = cleanProducto(descripcion);
+            
+            mappedData.push({
+              cliente: currentClienteName,
+              numeroCliente: currentClienteNum,
+              producto: productoLimpio || descripcion,
+              lote: lote,
+              pallets: 1,
+              cantidad: bultos,
+              kilos: peso,
+              numeroPallet: palletId,
+              contenedor: contenedor,
+            });
+          }
+          continue;
+        }
         
         if (cell0.includes('cliente') || cell0 === 'cliente:') {
           currentClienteNum = String(row[1] || '-').trim();
@@ -153,10 +222,15 @@ export default function LogisticsDashboard() {
         if (colNroPallet !== -1) {
           const nroPallet = String(row[colNroPallet] || '').trim();
           if (nroPallet && /^\d{4,8}$/.test(nroPallet)) {
+            const descripcion = colContenido !== -1 ? String(row[colContenido] || '').trim() : '';
+            const lote = extractLote(descripcion);
+            const productoLimpio = cleanProducto(descripcion);
+            
             mappedData.push({
               cliente: currentClienteName,
               numeroCliente: currentClienteNum,
-              producto: colContenido !== -1 ? String(row[colContenido] || '').trim() : '',
+              producto: productoLimpio || descripcion,
+              lote: lote,
               pallets: 1,
               cantidad: parseNumber(row[colCajas]),
               kilos: parseNumber(row[colKilos]),
@@ -171,10 +245,15 @@ export default function LogisticsDashboard() {
           const producto = row[colContenido];
           const cajas = row[colCajas];
           if (producto && String(producto).trim() !== '' && cajas !== undefined && cajas !== '') {
+            const descripcion = String(producto).trim();
+            const lote = extractLote(descripcion);
+            const productoLimpio = cleanProducto(descripcion);
+            
             mappedData.push({
               cliente: currentClienteName,
               numeroCliente: currentClienteNum,
-              producto: String(producto).trim(),
+              producto: productoLimpio || descripcion,
+              lote: lote,
               pallets: parseNumber(row[colPallets]),
               cantidad: parseNumber(row[colCajas]),
               kilos: parseNumber(row[colKilos])
@@ -539,13 +618,13 @@ export default function LogisticsDashboard() {
               </div>
             </div>
 
-            {/* Buscador de cliente */}
+            {/* Buscador */}
             <div className="mb-6">
               <input
                 type="text"
                 value={inventorySearch}
                 onChange={e => { setInventorySearch(e.target.value); setExpandedContainers(new Set()); }}
-                placeholder="Buscar por cliente o número de cliente..."
+                placeholder="Buscar por cliente, contenedor, lote o número de cliente..."
                 className="w-full p-3 text-xs font-mono bg-white border border-neutral-200 focus:border-neutral-900 outline-none transition-colors uppercase tracking-widest"
               />
             </div>
@@ -564,44 +643,17 @@ export default function LogisticsDashboard() {
                     const clienteLower = (item.cliente || '').toLowerCase();
                     const numCliente = String(item.numeroCliente || '');
                     const numClienteSinPunto = numCliente.replace(/\./g, '');
+                    const contenedorLower = (item.contenedor || '').toLowerCase();
+                    const loteLower = (item.lote || '').toLowerCase();
                     return clienteLower.includes(searchTerm) ||
                       numCliente.includes(searchTerm) ||
-                      numClienteSinPunto.includes(searchTerm);
+                      numClienteSinPunto.includes(searchTerm) ||
+                      contenedorLower.includes(searchTerm) ||
+                      loteLower.includes(searchTerm);
                   })
                 : inventoryData;
 
-              const hasIndividualPallets = inventoryData.some(item => item.numeroPallet);
-
-              if (!hasIndividualPallets) {
-                // Vista plana (sin búsqueda o datos agregados)
-                return (
-                  <div className="border border-neutral-200 bg-white flex-1 overflow-hidden flex flex-col">
-                    <div className="grid grid-cols-6 border-b border-neutral-200 bg-neutral-50 p-4 text-[10px] font-mono uppercase tracking-widest text-neutral-500">
-                      <div className="col-span-1">No. Cliente</div>
-                      <div className="col-span-1">Cliente</div>
-                      <div className="col-span-2">Producto</div>
-                      <div className="col-span-1 text-right">Pallets</div>
-                      <div className="col-span-1 text-right">Cajas / Kilos</div>
-                    </div>
-                    <div className="divide-y divide-neutral-100 overflow-auto flex-1">
-                      {filtered.map((item, i) => (
-                        <div key={i} className="grid grid-cols-6 p-4 text-xs font-mono uppercase tracking-wider text-neutral-900 hover:bg-neutral-50 transition-colors">
-                          <div className="col-span-1 text-neutral-500">{item.numeroCliente}</div>
-                          <div className="col-span-1 font-medium truncate pr-4" title={item.cliente}>{item.cliente}</div>
-                          <div className="col-span-2 truncate pr-4" title={item.producto}>{item.producto}</div>
-                          <div className="col-span-1 text-right">{item.pallets}</div>
-                          <div className="col-span-1 text-right">
-                            <div>{item.cantidad} UND</div>
-                            <div className="text-[10px] text-neutral-500 mt-1">{item.kilos} KG</div>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                );
-              }
-
-              // Vista agrupada por contenedor (datos individuales de pallet)
+              // Vista agrupada por contenedor (SIEMPRE)
               const sorted = [...filtered].sort((a, b) => {
                 const ca = (a.contenedor || 'SIN CONTENEDOR').toUpperCase();
                 const cb = (b.contenedor || 'SIN CONTENEDOR').toUpperCase();
@@ -625,7 +677,7 @@ export default function LogisticsDashboard() {
               return (
                 <div className="flex-1 overflow-auto flex flex-col gap-0">
                   {/* Resumen */}
-                  <div className="border border-neutral-200 bg-neutral-50 p-4 mb-4 grid grid-cols-4 gap-4">
+                  <div className="border border-neutral-200 bg-neutral-50 p-4 mb-4 grid grid-cols-5 gap-4">
                     <div>
                       <div className="text-[10px] font-mono uppercase tracking-widest text-neutral-500">
                         {isSingleClient ? 'Cliente' : 'Clientes en vista'}
@@ -636,10 +688,10 @@ export default function LogisticsDashboard() {
                     </div>
                     <div>
                       <div className="text-[10px] font-mono uppercase tracking-widest text-neutral-500">
-                        {isSingleClient ? 'Nro. Cliente' : 'Contenedores'}
+                        Contenedores
                       </div>
                       <div className="text-sm font-mono font-medium mt-1">
-                        {isSingleClient ? (filtered[0]?.numeroCliente || '—') : Object.keys(grouped).length}
+                        {Object.keys(grouped).length}
                       </div>
                     </div>
                     <div>
@@ -647,8 +699,12 @@ export default function LogisticsDashboard() {
                       <div className="text-sm font-mono font-medium mt-1">{totalPallets}</div>
                     </div>
                     <div>
-                      <div className="text-[10px] font-mono uppercase tracking-widest text-neutral-500">Total Cajas / Kilos</div>
-                      <div className="text-sm font-mono font-medium mt-1">{totalCajas.toLocaleString('es-AR')} / {totalKilos.toLocaleString('es-AR')} KG</div>
+                      <div className="text-[10px] font-mono uppercase tracking-widest text-neutral-500">Total Cajas</div>
+                      <div className="text-sm font-mono font-medium mt-1">{totalCajas.toLocaleString('es-AR')}</div>
+                    </div>
+                    <div>
+                      <div className="text-[10px] font-mono uppercase tracking-widest text-neutral-500">Total Kilos</div>
+                      <div className="text-sm font-mono font-medium mt-1">{totalKilos.toLocaleString('es-AR')} KG</div>
                     </div>
                   </div>
 
@@ -658,12 +714,12 @@ export default function LogisticsDashboard() {
                     const cTotal = items.reduce((s, i) => s + (Number(i.cantidad) || 0), 0);
                     const kTotal = items.reduce((s, i) => s + (Number(i.kilos) || 0), 0);
 
-                    // Agrupar por producto dentro del contenedor para mostrar subtotales
-                    const byProducto: Record<string, typeof items> = {};
+                    // Agrupar por lote dentro del contenedor
+                    const byLote: Record<string, typeof items> = {};
                     for (const item of items) {
-                      const p = (item.producto || 'SIN PRODUCTO').toUpperCase().trim();
-                      if (!byProducto[p]) byProducto[p] = [];
-                      byProducto[p].push(item);
+                      const l = (item.lote || 'SIN LOTE').toUpperCase().trim();
+                      if (!byLote[l]) byLote[l] = [];
+                      byLote[l].push(item);
                     }
 
                     return (
@@ -688,33 +744,32 @@ export default function LogisticsDashboard() {
                         {isOpen && (
                           <div className="border-t border-neutral-100">
                             {/* Header de columnas */}
-                            <div className="grid grid-cols-12 px-6 py-2 bg-neutral-50 text-[10px] font-mono uppercase tracking-widest text-neutral-400 border-b border-neutral-100">
+                            <div className="grid grid-cols-12 px-4 py-2 bg-neutral-50 text-[10px] font-mono uppercase tracking-widest text-neutral-400 border-b border-neutral-100">
                               <div className="col-span-2">Nro. Pallet</div>
-                              <div className="col-span-6">Producto</div>
+                              <div className="col-span-5">Producto</div>
+                              <div className="col-span-1">Lote</div>
                               <div className="col-span-2 text-right">Cajas</div>
                               <div className="col-span-2 text-right">Kilos</div>
                             </div>
 
-                            {/* Filas por producto (con separador entre productos distintos) */}
-                            {Object.entries(byProducto).map(([producto, pallets], pi) => (
-                              <div key={producto}>
-                                {pi > 0 && <div className="border-t-2 border-neutral-200 mx-6" />}
-                                {/* Etiqueta del producto */}
-                                <div className="px-6 py-1.5 bg-neutral-50 border-b border-neutral-100">
-                                  <span className="text-[10px] font-mono uppercase tracking-widest text-neutral-600 font-medium">{producto}</span>
-                                </div>
-                                {/* Pallets del producto */}
+                            {/* Filas por lote */}
+                            {Object.entries(byLote).map(([lote, pallets], li) => (
+                              <div key={lote}>
+                                {li > 0 && <div className="border-t border-neutral-200 mx-4" />}
+                                {/* Pallets del lote */}
                                 {pallets.sort((a, b) => String(a.numeroPallet || '').localeCompare(String(b.numeroPallet || ''))).map((item, j) => (
-                                  <div key={j} className="grid grid-cols-12 px-6 py-2.5 text-xs font-mono text-neutral-700 hover:bg-neutral-50 border-b border-neutral-50 last:border-0 transition-colors">
+                                  <div key={j} className="grid grid-cols-12 px-4 py-2.5 text-xs font-mono text-neutral-700 hover:bg-neutral-50 border-b border-neutral-50 last:border-0 transition-colors">
                                     <div className="col-span-2 text-neutral-500">{item.numeroPallet || '—'}</div>
-                                    <div className="col-span-6 text-neutral-400 text-[10px] uppercase tracking-wider">{item.producto}</div>
+                                    <div className="col-span-5 text-neutral-600 uppercase tracking-wider truncate" title={item.producto}>{item.producto || '—'}</div>
+                                    <div className="col-span-1 text-neutral-400 text-[10px]">{item.lote || '—'}</div>
                                     <div className="col-span-2 text-right">{item.cantidad || '—'}</div>
                                     <div className="col-span-2 text-right">{Number(item.kilos || 0).toLocaleString('es-AR')}</div>
                                   </div>
                                 ))}
-                                {/* Subtotal por producto */}
-                                <div className="grid grid-cols-12 px-6 py-2 bg-neutral-50 border-t border-neutral-200 text-[10px] font-mono uppercase tracking-widest text-neutral-500">
-                                  <div className="col-span-8 font-medium">Subtotal {producto}</div>
+                                {/* Subtotal por lote */}
+                                <div className="grid grid-cols-12 px-4 py-2 bg-neutral-50 border-t border-neutral-200 text-[10px] font-mono uppercase tracking-widest text-neutral-500">
+                                  <div className="col-span-7 font-medium">Subtotal Lote {lote}</div>
+                                  <div className="col-span-1"></div>
                                   <div className="col-span-2 text-right font-medium">{pallets.reduce((s, i) => s + (Number(i.cantidad) || 0), 0)}</div>
                                   <div className="col-span-2 text-right font-medium">{pallets.reduce((s, i) => s + (Number(i.kilos) || 0), 0).toLocaleString('es-AR')}</div>
                                 </div>
@@ -722,8 +777,9 @@ export default function LogisticsDashboard() {
                             ))}
 
                             {/* Total del contenedor */}
-                            <div className="grid grid-cols-12 px-6 py-3 bg-neutral-900 text-[10px] font-mono uppercase tracking-widest text-white">
-                              <div className="col-span-8 font-medium">Total {contenedor}</div>
+                            <div className="grid grid-cols-12 px-4 py-3 bg-neutral-900 text-[10px] font-mono uppercase tracking-widest text-white">
+                              <div className="col-span-7 font-medium">Total {contenedor}</div>
+                              <div className="col-span-1"></div>
                               <div className="col-span-2 text-right font-medium">{cTotal}</div>
                               <div className="col-span-2 text-right font-medium">{kTotal.toLocaleString('es-AR')}</div>
                             </div>
