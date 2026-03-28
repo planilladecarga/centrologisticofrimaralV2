@@ -118,13 +118,14 @@ export default function LogisticsDashboard() {
       let currentClienteNum = '-';
       let currentClienteName = '-';
       
-      let colPallets = -1;
-      let colCajas = -1;
-      let colKilos = -1;
-      let colContenido = -1;
-      let colNroPallet = -1;
-      let colContenedor = -1;
-      let isPlanillaCarga = false;
+      // Para el formato de STOCK (el más común)
+      // Columnas: Fec Com | Fec Ent | Contenedor | Pallets | Cajas | Kilos | Contenido | empty | Nro Lote | DUA | F. Venc. | L/E
+      const COL_CONTENEDOR = 2;
+      const COL_PALLETS = 3;
+      const COL_CAJAS = 4;
+      const COL_KILOS = 5;
+      const COL_CONTENIDO = 6;
+      const COL_LOTE = 8;
 
       const parseNumber = (val: any) => {
         if (typeof val === 'number') return val;
@@ -134,37 +135,101 @@ export default function LogisticsDashboard() {
         return isNaN(num) ? 0 : num;
       };
 
-      // Detectar si es formato Planilla de Carga (Contenedor, Cant., Bultos, Peso, Descripción, Pallet ID)
-      const headerRow = rawData.find((row: any[]) => {
-        const rowStr = row.map(c => String(c || '').toLowerCase()).join(' ');
-        return rowStr.includes('contenedor') && rowStr.includes('bultos') && rowStr.includes('pallet');
-      });
+      // Detectar el formato del archivo
+      let isStockFormat = false;
+      let foundHeader = false;
       
-      if (headerRow) {
-        isPlanillaCarga = true;
-        colContenedor = headerRow.findIndex(c => String(c || '').toLowerCase().includes('contenedor'));
-        colCajas = headerRow.findIndex(c => String(c || '').toLowerCase().includes('bultos'));
-        colKilos = headerRow.findIndex(c => String(c || '').toLowerCase().includes('peso'));
-        colContenido = headerRow.findIndex(c => String(c || '').toLowerCase().includes('descrip'));
-        colNroPallet = headerRow.findIndex(c => String(c || '').toLowerCase().includes('pallet') && String(c || '').toLowerCase().includes('id'));
-        if (colNroPallet === -1) colNroPallet = headerRow.length - 1; // Última columna suele ser Pallet ID
+      for (let i = 0; i < Math.min(20, rawData.length); i++) {
+        const row = rawData[i];
+        if (!Array.isArray(row)) continue;
+        const rowStr = row.map(c => String(c || '').toLowerCase()).join(' ');
+        if (rowStr.includes('contenedor') && rowStr.includes('pallets') && rowStr.includes('cajas') && rowStr.includes('kilos')) {
+          isStockFormat = true;
+          foundHeader = true;
+          console.log("Detectado formato STOCK en fila", i);
+          break;
+        }
       }
       
-      for (let i = 0; i < rawData.length; i++) {
-        const row = rawData[i];
-        if (!Array.isArray(row) || row.length === 0) continue;
+      // También detectar formato Planilla de Carga
+      const headerRowPlanilla = rawData.find((row: any[]) => {
+        const rowStr = row.map(c => String(c || '').toLowerCase()).join(' ');
+        return rowStr.includes('contenedor') && rowStr.includes('bultos') && rowStr.includes('pallet id');
+      });
+      
+      const isPlanillaCarga = !!headerRowPlanilla && !isStockFormat;
+      
+      if (isStockFormat) {
+        // Formato de STOCK: Cliente: xxx, luego datos con Contenedor, Pallets (count), Cajas, Kilos, Contenido, Nro Lote
+        for (let i = 0; i < rawData.length; i++) {
+          const row = rawData[i];
+          if (!Array.isArray(row) || row.length === 0) continue;
+          
+          const cell0 = String(row[0] || '').trim().toLowerCase();
+          const cell1 = String(row[1] || '').trim();
+          
+          // Detectar cambio de cliente
+          if (cell0 === 'cliente:') {
+            currentClienteNum = String(row[1] || '-').trim();
+            currentClienteName = String(row[2] || '-').trim();
+            console.log(`Cliente detectado: ${currentClienteNum} - ${currentClienteName}`);
+            continue;
+          }
+          
+          // Saltar filas de metadata y totales
+          if (cell0.includes('fecha') || cell0.includes('reporte') || cell0.includes('fec com')) continue;
+          if (cell0 === 'nan' || cell0 === '') continue;
+          if (cell1.includes('totales')) continue;
+          
+          // Procesar fila de datos
+          const contenedor = String(row[COL_CONTENEDOR] || '').trim();
+          const pallets = parseNumber(row[COL_PALLETS]);
+          const cajas = parseNumber(row[COL_CAJAS]);
+          const kilos = parseNumber(row[COL_KILOS]);
+          const contenido = String(row[COL_CONTENIDO] || '').trim();
+          const lote = String(row[COL_LOTE] || '').trim();
+          
+          // Validar que tenga contenedor y datos
+          if (contenedor && contenedor.length > 3 && !contenedor.toLowerCase().includes('contenedor')) {
+            mappedData.push({
+              cliente: currentClienteName,
+              numeroCliente: currentClienteNum,
+              contenedor: contenedor.toUpperCase(),
+              producto: contenido,
+              lote: lote,
+              pallets: pallets,
+              cantidad: cajas,
+              kilos: kilos,
+            });
+          }
+        }
+      } else if (isPlanillaCarga && headerRowPlanilla) {
+        // Formato Planilla de Carga (con Pallet ID individual)
+        let colContenedor = headerRowPlanilla.findIndex(c => String(c || '').toLowerCase().includes('contenedor'));
+        let colCajas = headerRowPlanilla.findIndex(c => String(c || '').toLowerCase().includes('bultos'));
+        let colKilos = headerRowPlanilla.findIndex(c => String(c || '').toLowerCase().includes('peso'));
+        let colContenido = headerRowPlanilla.findIndex(c => String(c || '').toLowerCase().includes('descrip'));
+        let colNroPallet = headerRowPlanilla.findIndex(c => String(c || '').toLowerCase().includes('pallet') && String(c || '').toLowerCase().includes('id'));
+        if (colNroPallet === -1) colNroPallet = headerRowPlanilla.length - 1;
         
-        const cell0 = String(row[0] || '').trim().toLowerCase();
-        const cell1 = String(row[1] || '').trim().toLowerCase();
-        const cell2 = String(row[2] || '').trim().toLowerCase();
-        
-        // Saltar encabezados y filas vacías
-        if (cell0.includes('planilla') || cell0.includes('totales') || cell0.includes('resumen')) continue;
-        if (cell0.includes('fecha') || cell0.includes('reporte') || cell0.includes('cotes')) continue;
-        if (isPlanillaCarga && (cell0.includes('contenedor') || cell0 === '')) continue;
-        
-        // Formato Planilla de Carga
-        if (isPlanillaCarga && colContenedor !== -1) {
+        for (let i = 0; i < rawData.length; i++) {
+          const row = rawData[i];
+          if (!Array.isArray(row) || row.length === 0) continue;
+          
+          const cell0 = String(row[0] || '').trim().toLowerCase();
+          
+          // Detectar cambio de cliente
+          if (cell0 === 'cliente:') {
+            currentClienteNum = String(row[1] || '-').trim();
+            currentClienteName = String(row[2] || '-').trim();
+            continue;
+          }
+          
+          // Saltar filas no válidas
+          if (cell0.includes('planilla') || cell0.includes('totales') || cell0.includes('resumen')) continue;
+          if (cell0.includes('fecha') || cell0.includes('reporte') || cell0.includes('cotes')) continue;
+          if (cell0.includes('contenedor') || cell0 === '') continue;
+          
           const contenedor = String(row[colContenedor] || '').trim();
           const descripcion = colContenido !== -1 ? String(row[colContenido] || '').trim() : '';
           const palletId = colNroPallet !== -1 ? String(row[colNroPallet] || '').trim() : '';
@@ -185,81 +250,78 @@ export default function LogisticsDashboard() {
               cantidad: bultos,
               kilos: peso,
               numeroPallet: palletId,
-              contenedor: contenedor,
+              contenedor: contenedor.toUpperCase(),
             });
           }
-          continue;
         }
+      } else {
+        // Formato genérico anterior
+        let colPallets = -1;
+        let colCajas = -1;
+        let colKilos = -1;
+        let colContenido = -1;
+        let colNroPallet = -1;
+        let colContenedor = -1;
+        let colLote = -1;
         
-        if (cell0.includes('cliente') || cell0 === 'cliente:') {
-          currentClienteNum = String(row[1] || '-').trim();
-          currentClienteName = String(row[2] || '-').trim();
-          continue;
-        }
-        
-        if (cell0.includes('totales') || cell1.includes('totales') || cell2.includes('totales')) continue;
-        if (cell0.includes('fecha') || cell0.includes('reporte')) continue;
-        
-        const rowString = row.map(c => String(c || '').toLowerCase()).join(' ');
-        if (rowString.includes('pallets') && (rowString.includes('cajas') || rowString.includes('cantidad')) && (rowString.includes('kilos') || rowString.includes('peso'))) {
-          colPallets = row.findIndex(c => String(c || '').toLowerCase().includes('pallet'));
-          colCajas = row.findIndex(c => String(c || '').toLowerCase().includes('caja') || String(c || '').toLowerCase().includes('cantidad'));
-          colKilos = row.findIndex(c => String(c || '').toLowerCase().includes('kilo') || String(c || '').toLowerCase().includes('peso'));
-          colContenido = row.findIndex(c => String(c || '').toLowerCase().includes('contenido') || String(c || '').toLowerCase().includes('descrip') || String(c || '').toLowerCase().includes('producto') || String(c || '').toLowerCase().includes('articulo'));
-          continue;
-        }
-        // Detectar encabezados de hoja de pallet individual (nro pallet + contenedor)
-        if ((rowString.includes('nro') || rowString.includes('número') || rowString.includes('numero')) && rowString.includes('pallet')) {
-          colNroPallet = row.findIndex(c => { const s = String(c||'').toLowerCase(); return (s.includes('nro') || s.includes('n°') || s.includes('numero') || s.includes('número')) && s.includes('pallet'); });
-          if (colNroPallet === -1) colNroPallet = row.findIndex(c => String(c||'').toLowerCase().trim() === 'pallet');
-          colContenedor = row.findIndex(c => { const s = String(c||'').toLowerCase(); return s.includes('contenedor') || s.includes('cont.') || (s.includes('cont') && s.length < 8); });
-          colCajas = row.findIndex(c => String(c || '').toLowerCase().includes('caja') || String(c || '').toLowerCase().includes('cantidad'));
-          colKilos = row.findIndex(c => String(c || '').toLowerCase().includes('kilo') || String(c || '').toLowerCase().includes('peso'));
-          colContenido = row.findIndex(c => String(c || '').toLowerCase().includes('contenido') || String(c || '').toLowerCase().includes('descrip') || String(c || '').toLowerCase().includes('producto') || String(c || '').toLowerCase().includes('articulo'));
-          continue;
-        }
-        
-        if (colNroPallet !== -1) {
-          const nroPallet = String(row[colNroPallet] || '').trim();
-          if (nroPallet && /^\d{4,8}$/.test(nroPallet)) {
-            const descripcion = colContenido !== -1 ? String(row[colContenido] || '').trim() : '';
-            const lote = extractLote(descripcion);
-            const productoLimpio = cleanProducto(descripcion);
+        for (let i = 0; i < rawData.length; i++) {
+          const row = rawData[i];
+          if (!Array.isArray(row) || row.length === 0) continue;
+          
+          const cell0 = String(row[0] || '').trim().toLowerCase();
+          const cell1 = String(row[1] || '').trim().toLowerCase();
+          const cell2 = String(row[2] || '').trim().toLowerCase();
+          
+          if (cell0 === 'cliente:') {
+            currentClienteNum = String(row[1] || '-').trim();
+            currentClienteName = String(row[2] || '-').trim();
+            continue;
+          }
+          
+          if (cell0.includes('totales') || cell1.includes('totales') || cell2.includes('totales')) continue;
+          if (cell0.includes('fecha') || cell0.includes('reporte')) continue;
+          
+          const rowString = row.map(c => String(c || '').toLowerCase()).join(' ');
+          
+          // Detectar encabezados
+          if (rowString.includes('contenedor') && (rowString.includes('pallet') || rowString.includes('cajas'))) {
+            colContenedor = row.findIndex(c => String(c || '').toLowerCase().includes('contenedor'));
+            colPallets = row.findIndex(c => String(c || '').toLowerCase() === 'pallets' || String(c || '').toLowerCase().includes('pallet'));
+            colCajas = row.findIndex(c => String(c || '').toLowerCase().includes('cajas') || String(c || '').toLowerCase().includes('caja'));
+            colKilos = row.findIndex(c => String(c || '').toLowerCase().includes('kilo') || String(c || '').toLowerCase().includes('peso'));
+            colContenido = row.findIndex(c => String(c || '').toLowerCase().includes('contenido') || String(c || '').toLowerCase().includes('descrip') || String(c || '').toLowerCase().includes('producto'));
+            colLote = row.findIndex(c => String(c || '').toLowerCase().includes('lote'));
+            continue;
+          }
+          
+          // Procesar datos
+          if (colContenedor !== -1) {
+            const contenedor = String(row[colContenedor] || '').trim();
+            const producto = colContenido !== -1 ? String(row[colContenido] || '').trim() : '';
+            const lote = colLote !== -1 ? String(row[colLote] || '').trim() : '';
+            const pallets = colPallets !== -1 ? parseNumber(row[colPallets]) : 1;
+            const cajas = colCajas !== -1 ? parseNumber(row[colCajas]) : 0;
+            const kilos = colKilos !== -1 ? parseNumber(row[colKilos]) : 0;
             
-            mappedData.push({
-              cliente: currentClienteName,
-              numeroCliente: currentClienteNum,
-              producto: productoLimpio || descripcion,
-              lote: lote,
-              pallets: 1,
-              cantidad: parseNumber(row[colCajas]),
-              kilos: parseNumber(row[colKilos]),
-              numeroPallet: nroPallet,
-              contenedor: colContenedor !== -1 ? String(row[colContenedor] || '').trim() : '',
-            });
+            if (contenedor && contenedor.length > 3) {
+              mappedData.push({
+                cliente: currentClienteName,
+                numeroCliente: currentClienteNum,
+                contenedor: contenedor.toUpperCase(),
+                producto: producto,
+                lote: lote,
+                pallets: pallets,
+                cantidad: cajas,
+                kilos: kilos,
+              });
+            }
           }
-          continue;
         }
+      }
 
-        if (colContenido !== -1 && colCajas !== -1) {
-          const producto = row[colContenido];
-          const cajas = row[colCajas];
-          if (producto && String(producto).trim() !== '' && cajas !== undefined && cajas !== '') {
-            const descripcion = String(producto).trim();
-            const lote = extractLote(descripcion);
-            const productoLimpio = cleanProducto(descripcion);
-            
-            mappedData.push({
-              cliente: currentClienteName,
-              numeroCliente: currentClienteNum,
-              producto: productoLimpio || descripcion,
-              lote: lote,
-              pallets: parseNumber(row[colPallets]),
-              cantidad: parseNumber(row[colCajas]),
-              kilos: parseNumber(row[colKilos])
-            });
-          }
-        }
+      console.log("Total registros mapeados:", mappedData.length);
+      if (mappedData.length > 0) {
+        console.log("Ejemplo primer registro:", mappedData[0]);
       }
 
       setIsUploading(true);
@@ -305,7 +367,7 @@ export default function LogisticsDashboard() {
         if (addCount > 0) addBatches.push(currentAddBatch);
         for (const batch of addBatches) await batch.commit();
         console.log("Subida completada con éxito.");
-        setToastMessage({ text: "¡Inventario actualizado correctamente en la nube!", type: 'success' });
+        setToastMessage({ text: `¡Inventario actualizado! ${mappedData.length} registros cargados.`, type: 'success' });
 
       } catch (error) {
         console.error("Error crítico al subir a Firebase:", error);
@@ -657,8 +719,7 @@ export default function LogisticsDashboard() {
               const sorted = [...filtered].sort((a, b) => {
                 const ca = (a.contenedor || 'SIN CONTENEDOR').toUpperCase();
                 const cb = (b.contenedor || 'SIN CONTENEDOR').toUpperCase();
-                if (ca !== cb) return ca.localeCompare(cb);
-                return String(a.numeroPallet || '').localeCompare(String(b.numeroPallet || ''));
+                return ca.localeCompare(cb);
               });
 
               const grouped: Record<string, typeof sorted> = {};
@@ -669,7 +730,7 @@ export default function LogisticsDashboard() {
               }
 
               const uniqueClientes = [...new Set(filtered.map(i => i.cliente).filter(Boolean))];
-              const totalPallets = filtered.length;
+              const totalPallets = filtered.reduce((s, i) => s + (Number(i.pallets) || 0), 0);
               const totalCajas = filtered.reduce((s, i) => s + (Number(i.cantidad) || 0), 0);
               const totalKilos = filtered.reduce((s, i) => s + (Number(i.kilos) || 0), 0);
               const isSingleClient = searchTerm && uniqueClientes.length === 1;
@@ -696,7 +757,7 @@ export default function LogisticsDashboard() {
                     </div>
                     <div>
                       <div className="text-[10px] font-mono uppercase tracking-widest text-neutral-500">Total Pallets</div>
-                      <div className="text-sm font-mono font-medium mt-1">{totalPallets}</div>
+                      <div className="text-sm font-mono font-medium mt-1">{totalPallets.toLocaleString('es-AR')}</div>
                     </div>
                     <div>
                       <div className="text-[10px] font-mono uppercase tracking-widest text-neutral-500">Total Cajas</div>
@@ -711,6 +772,7 @@ export default function LogisticsDashboard() {
                   {/* Contenedores */}
                   {Object.entries(grouped).map(([contenedor, items]) => {
                     const isOpen = expandedContainers.has(contenedor);
+                    const pTotal = items.reduce((s, i) => s + (Number(i.pallets) || 0), 0);
                     const cTotal = items.reduce((s, i) => s + (Number(i.cantidad) || 0), 0);
                     const kTotal = items.reduce((s, i) => s + (Number(i.kilos) || 0), 0);
 
@@ -732,10 +794,10 @@ export default function LogisticsDashboard() {
                           <div className="flex items-center gap-4">
                             <span className="text-[10px] font-mono text-neutral-400">{isOpen ? '▼' : '▶'}</span>
                             <span className="text-xs font-mono font-medium uppercase tracking-widest text-neutral-900">{contenedor}</span>
-                            <span className="text-[10px] font-mono text-neutral-500 bg-neutral-100 px-2 py-0.5">{items.length} pallets</span>
+                            <span className="text-[10px] font-mono text-neutral-500 bg-neutral-100 px-2 py-0.5">{pTotal} pallets</span>
                           </div>
                           <div className="flex gap-6 text-[10px] font-mono text-neutral-500 uppercase tracking-widest">
-                            <span>{cTotal} cajas</span>
+                            <span>{cTotal.toLocaleString('es-AR')} cajas</span>
                             <span>{kTotal.toLocaleString('es-AR')} kg</span>
                           </div>
                         </button>
@@ -745,33 +807,33 @@ export default function LogisticsDashboard() {
                           <div className="border-t border-neutral-100">
                             {/* Header de columnas */}
                             <div className="grid grid-cols-12 px-4 py-2 bg-neutral-50 text-[10px] font-mono uppercase tracking-widest text-neutral-400 border-b border-neutral-100">
-                              <div className="col-span-2">Nro. Pallet</div>
-                              <div className="col-span-5">Producto</div>
-                              <div className="col-span-1">Lote</div>
+                              <div className="col-span-1">Pallets</div>
+                              <div className="col-span-6">Producto</div>
+                              <div className="col-span-2">Lote</div>
                               <div className="col-span-2 text-right">Cajas</div>
-                              <div className="col-span-2 text-right">Kilos</div>
+                              <div className="col-span-1 text-right">Kilos</div>
                             </div>
 
                             {/* Filas por lote */}
-                            {Object.entries(byLote).map(([lote, pallets], li) => (
+                            {Object.entries(byLote).map(([lote, itemsLote], li) => (
                               <div key={lote}>
                                 {li > 0 && <div className="border-t border-neutral-200 mx-4" />}
-                                {/* Pallets del lote */}
-                                {pallets.sort((a, b) => String(a.numeroPallet || '').localeCompare(String(b.numeroPallet || ''))).map((item, j) => (
+                                {/* Items del lote */}
+                                {itemsLote.map((item, j) => (
                                   <div key={j} className="grid grid-cols-12 px-4 py-2.5 text-xs font-mono text-neutral-700 hover:bg-neutral-50 border-b border-neutral-50 last:border-0 transition-colors">
-                                    <div className="col-span-2 text-neutral-500">{item.numeroPallet || '—'}</div>
-                                    <div className="col-span-5 text-neutral-600 uppercase tracking-wider truncate" title={item.producto}>{item.producto || '—'}</div>
-                                    <div className="col-span-1 text-neutral-400 text-[10px]">{item.lote || '—'}</div>
-                                    <div className="col-span-2 text-right">{item.cantidad || '—'}</div>
-                                    <div className="col-span-2 text-right">{Number(item.kilos || 0).toLocaleString('es-AR')}</div>
+                                    <div className="col-span-1 text-neutral-500">{item.pallets || '—'}</div>
+                                    <div className="col-span-6 text-neutral-600 uppercase tracking-wider truncate" title={item.producto}>{item.producto || '—'}</div>
+                                    <div className="col-span-2 text-neutral-400 text-[10px] truncate" title={item.lote}>{item.lote || '—'}</div>
+                                    <div className="col-span-2 text-right">{item.cantidad?.toLocaleString('es-AR') || '—'}</div>
+                                    <div className="col-span-1 text-right">{Number(item.kilos || 0).toLocaleString('es-AR')}</div>
                                   </div>
                                 ))}
                                 {/* Subtotal por lote */}
                                 <div className="grid grid-cols-12 px-4 py-2 bg-neutral-50 border-t border-neutral-200 text-[10px] font-mono uppercase tracking-widest text-neutral-500">
                                   <div className="col-span-7 font-medium">Subtotal Lote {lote}</div>
-                                  <div className="col-span-1"></div>
-                                  <div className="col-span-2 text-right font-medium">{pallets.reduce((s, i) => s + (Number(i.cantidad) || 0), 0)}</div>
-                                  <div className="col-span-2 text-right font-medium">{pallets.reduce((s, i) => s + (Number(i.kilos) || 0), 0).toLocaleString('es-AR')}</div>
+                                  <div className="col-span-2"></div>
+                                  <div className="col-span-2 text-right font-medium">{itemsLote.reduce((s, i) => s + (Number(i.cantidad) || 0), 0).toLocaleString('es-AR')}</div>
+                                  <div className="col-span-1 text-right font-medium">{itemsLote.reduce((s, i) => s + (Number(i.kilos) || 0), 0).toLocaleString('es-AR')}</div>
                                 </div>
                               </div>
                             ))}
@@ -779,9 +841,9 @@ export default function LogisticsDashboard() {
                             {/* Total del contenedor */}
                             <div className="grid grid-cols-12 px-4 py-3 bg-neutral-900 text-[10px] font-mono uppercase tracking-widest text-white">
                               <div className="col-span-7 font-medium">Total {contenedor}</div>
-                              <div className="col-span-1"></div>
-                              <div className="col-span-2 text-right font-medium">{cTotal}</div>
-                              <div className="col-span-2 text-right font-medium">{kTotal.toLocaleString('es-AR')}</div>
+                              <div className="col-span-2"></div>
+                              <div className="col-span-2 text-right font-medium">{cTotal.toLocaleString('es-AR')}</div>
+                              <div className="col-span-1 text-right font-medium">{kTotal.toLocaleString('es-AR')}</div>
                             </div>
                           </div>
                         )}
