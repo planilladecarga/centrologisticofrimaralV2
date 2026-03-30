@@ -3,6 +3,9 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { db } from '../lib/firebase';
 import { collection, onSnapshot, writeBatch, doc, getDocs } from 'firebase/firestore';
+import dynamic from 'next/dynamic';
+
+const PdfProcessor = dynamic(() => import('../components/PdfProcessor'), { ssr: false });
 
 export default function LogisticsDashboard() {
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -238,7 +241,14 @@ export default function LogisticsDashboard() {
           >
             02. Inventario
           </button>
-          <button className="w-full text-left px-6 py-3 text-xs font-mono uppercase tracking-widest hover:text-white hover:bg-neutral-900 border-l-2 border-transparent transition-colors">
+          <button 
+            onClick={() => setActiveTab('despachos')}
+            className={`w-full text-left px-6 py-3 text-xs font-mono uppercase tracking-widest transition-colors ${
+              activeTab === 'despachos' 
+                ? 'text-white bg-neutral-900 border-l-2 border-white' 
+                : 'hover:text-white hover:bg-neutral-900 border-l-2 border-transparent'
+            }`}
+          >
             03. Despachos
           </button>
           <button className="w-full text-left px-6 py-3 text-xs font-mono uppercase tracking-widest hover:text-white hover:bg-neutral-900 border-l-2 border-transparent transition-colors">
@@ -449,6 +459,13 @@ export default function LogisticsDashboard() {
                 </div>
               </div>
             )}
+          </div>
+        )}
+
+        {/* Despachos Content */}
+        {activeTab === 'despachos' && (
+          <div className="flex-1 overflow-hidden flex flex-col">
+            <PdfProcessor />
           </div>
         )}
 
