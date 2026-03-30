@@ -298,7 +298,7 @@ export default function LogisticsDashboard() {
             <div className="flex justify-between items-end mb-8 border-b border-neutral-200 pb-6">
               <div>
                 <h2 className="text-2xl font-light tracking-tight text-neutral-900 uppercase">Resumen Operativo</h2>
-                <p className="text-xs font-mono text-neutral-500 mt-2 uppercase tracking-widest">
+                <p className="text-xs font-mono text-neutral-500 mt-2 uppercase tracking-widest" suppressHydrationWarning>
                   Actualizado: {new Date().toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit', year: 'numeric' })}
                 </p>
               </div>
