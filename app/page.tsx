@@ -257,7 +257,7 @@ export default function LogisticsDashboard() {
             03. Despachos
           </button>
           <button className="w-full text-left px-6 py-3 text-xs font-mono uppercase tracking-widest hover:text-white hover:bg-neutral-900 border-l-2 border-transparent transition-colors">
-            04. Personal
+            04. Temperaturas
           </button>
           <button 
             onClick={() => setActiveTab('configuracion')}
