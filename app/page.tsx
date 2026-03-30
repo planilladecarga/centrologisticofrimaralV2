@@ -15,6 +15,7 @@ export default function LogisticsDashboard() {
   const [isResetModalOpen, setIsResetModalOpen] = useState(false);
   const [isResetting, setIsResetting] = useState(false);
   const [toastMessage, setToastMessage] = useState<{text: string, type: 'success' | 'error'} | null>(null);
+  const [currentDate, setCurrentDate] = useState<string>('');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Auto-hide toast after 3 seconds
@@ -24,6 +25,10 @@ export default function LogisticsDashboard() {
       return () => clearTimeout(timer);
     }
   }, [toastMessage]);
+
+  useEffect(() => {
+    setCurrentDate(new Date().toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit', year: 'numeric' }));
+  }, []);
 
   useEffect(() => {
     const unsubscribe = onSnapshot(collection(db, 'inventory'), (snapshot) => {
@@ -298,8 +303,8 @@ export default function LogisticsDashboard() {
             <div className="flex justify-between items-end mb-8 border-b border-neutral-200 pb-6">
               <div>
                 <h2 className="text-2xl font-light tracking-tight text-neutral-900 uppercase">Resumen Operativo</h2>
-                <p className="text-xs font-mono text-neutral-500 mt-2 uppercase tracking-widest" suppressHydrationWarning>
-                  Actualizado: {new Date().toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit', year: 'numeric' })}
+                <p className="text-xs font-mono text-neutral-500 mt-2 uppercase tracking-widest">
+                  Actualizado: {currentDate}
                 </p>
               </div>
               <button 
