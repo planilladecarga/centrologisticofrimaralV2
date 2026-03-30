@@ -16,6 +16,7 @@ export default function LogisticsDashboard() {
   const [isResetting, setIsResetting] = useState(false);
   const [toastMessage, setToastMessage] = useState<{text: string, type: 'success' | 'error'} | null>(null);
   const [currentDate, setCurrentDate] = useState<string>('');
+  const [isClient, setIsClient] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Auto-hide toast after 3 seconds
@@ -27,6 +28,7 @@ export default function LogisticsDashboard() {
   }, [toastMessage]);
 
   useEffect(() => {
+    setIsClient(true);
     setCurrentDate(new Date().toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit', year: 'numeric' }));
   }, []);
 
@@ -206,6 +208,15 @@ export default function LogisticsDashboard() {
     };
     reader.readAsBinaryString(file);
   };
+
+
+  if (!isClient) {
+    return (
+      <div className="min-h-screen bg-neutral-100 flex items-center justify-center text-neutral-500 text-xs font-mono uppercase tracking-widest">
+        Cargando panel...
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-neutral-100 flex text-neutral-900 font-sans selection:bg-neutral-900 selection:text-white relative">
