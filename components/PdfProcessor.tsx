@@ -1,12 +1,14 @@
 'use client';
 
-import React, { useState, useRef } from 'react';
-import * as pdfjsLib from 'pdfjs-dist';
+import React, { useState, useRef, useEffect } from 'react';
 import * as XLSX from 'xlsx-js-style';
 import { Upload, FileText, Search, Download, AlertCircle, CheckCircle, Box, FileSpreadsheet } from 'lucide-react';
 
-// Configure PDF.js worker
-pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.mjs`;
+declare global {
+  interface Window {
+    pdfjsLib: any;
+  }
+}
 
 interface StockItem {
   id: string;
@@ -41,6 +43,18 @@ export default function PdfProcessor({ stock = MOCK_STOCK }: { stock?: StockItem
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  useEffect(() => {
+    if (typeof window !== 'undefined' && !window.pdfjsLib) {
+      const script = document.createElement('script');
+      script.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
+      script.async = true;
+      script.onload = () => {
+        window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+      };
+      document.body.appendChild(script);
+    }
+  }, []);
+
   const fuzzyMatch = (searchId: string, targetId: string) => {
     if (!searchId || !targetId) return false;
     
@@ -67,8 +81,12 @@ export default function PdfProcessor({ stock = MOCK_STOCK }: { stock?: StockItem
   };
 
   const extractTextFromPdf = async (file: File) => {
+    if (!window.pdfjsLib) {
+      throw new Error("PDF.js no ha cargado todavía. Por favor, espera un segundo e intenta de nuevo.");
+    }
+
     const arrayBuffer = await file.arrayBuffer();
-    const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+    const pdf = await window.pdfjsLib.getDocument({ data: arrayBuffer }).promise;
     let fullText = '';
     for (let i = 1; i <= pdf.numPages; i++) {
       const page = await pdf.getPage(i);
