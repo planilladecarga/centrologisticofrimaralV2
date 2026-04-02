@@ -6,6 +6,7 @@ import { collection, onSnapshot, writeBatch, doc, getDocs, addDoc, serverTimesta
 import dynamic from 'next/dynamic';
 
 const PdfProcessor = dynamic(() => import('../components/PdfProcessor'), { ssr: false });
+const TemperatureMonitor = dynamic(() => import('../components/TemperatureMonitor'), { ssr: false });
 
 interface ActivityRecord {
   id?: string;
@@ -331,9 +332,14 @@ export default function LogisticsDashboard() {
               }`}
             >{tab.label}</button>
           ))}
-          <button className="w-full text-left px-6 py-3 text-xs font-mono uppercase tracking-widest text-neutral-600 border-l-2 border-transparent cursor-default">
-            04. Temperaturas <span className="text-[9px] text-neutral-700">(PRÓXIMAMENTE)</span>
-          </button>
+          <button
+            onClick={() => setActiveTab('temperaturas')}
+            className={`w-full text-left px-6 py-3 text-xs font-mono uppercase tracking-widest transition-colors ${
+              activeTab === 'temperaturas'
+                ? 'text-white bg-neutral-900 border-l-2 border-white'
+                : 'hover:text-white hover:bg-neutral-900 border-l-2 border-transparent'
+            }`}
+          >04. Temperaturas</button>
         </nav>
         <div className="p-6 border-t border-neutral-900">
           <span className="w-full text-left text-xs font-mono uppercase tracking-widest text-neutral-600">
@@ -537,6 +543,13 @@ export default function LogisticsDashboard() {
         {activeTab === 'despachos' && (
           <div className="flex-1 overflow-hidden flex flex-col">
             <PdfProcessor inventoryData={inventoryData} />
+          </div>
+        )}
+
+        {/* ===== TEMPERATURAS ===== */}
+        {activeTab === 'temperaturas' && (
+          <div className="flex-1 overflow-hidden flex flex-col">
+            <TemperatureMonitor />
           </div>
         )}
 
