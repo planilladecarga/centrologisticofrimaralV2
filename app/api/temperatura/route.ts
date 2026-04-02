@@ -3,21 +3,20 @@ import { NextResponse } from 'next/server';
 export const dynamic = 'force-dynamic';
 
 export async function GET() {
-  const targetUrl = 'http://192.168.150.31/TemperaturaWeb/temperatura.php';
   try {
-    const res = await fetch(targetUrl, { cache: 'no-store' });
+    const res = await fetch('http://192.168.150.31/TemperaturaWeb/temperatura.php', {
+      cache: 'no-store',
+      signal: AbortSignal.timeout(10000),
+    });
     const html = await res.text();
-    const baseUrl = 'http://192.168.150.31/TemperaturaWeb/';
-    const fixedHtml = html
-      .replace(/(src|href|action)=["']\/TemperaturaWeb\//g, `$1="${baseUrl}`)
-      .replace(/url\(["']\/TemperaturaWeb\//g, `url("${baseUrl}`);
-    return new NextResponse(fixedHtml, {
+    return new NextResponse(html, {
       headers: {
         'Content-Type': 'text/html; charset=utf-8',
-        'Cache-Control': 'no-cache, no-store, must-revalidate',
+        'Cache-Control': 'no-cache',
+        'Access-Control-Allow-Origin': '*',
       },
     });
-  } catch {
-    return NextResponse.json({ error: 'Servidor no disponible' }, { status: 502 });
+  } catch (err: any) {
+    return NextResponse.json({ error: err.message || 'Servidor no disponible' }, { status: 502 });
   }
 }

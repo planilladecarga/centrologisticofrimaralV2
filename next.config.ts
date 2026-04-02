@@ -8,28 +8,23 @@ const nextConfig: NextConfig = {
   typescript: {
     ignoreBuildErrors: false,
   },
-  // Allow access to remote image placeholder.
   images: {
-    unoptimized: true, // GitHub Pages no soporta optimización de imágenes
+    unoptimized: true,
     remotePatterns: [
       {
         protocol: 'https',
         hostname: 'picsum.photos',
         port: '',
-        pathname: '/**', // This allows any path under the hostname
+        pathname: '/**',
       },
     ],
   },
-  // Desplegar en Vercel (necesario para API routes / proxy de temperaturas)
-  // No usar output: 'export' porque bloquea las API routes
+  // API routes require server mode (no static export)
+  // Para deploy: usar Vercel o ejecutar localmente con npm start
   transpilePackages: ['motion'],
   webpack: (config, {dev}) => {
-    // HMR is disabled in AI Studio via DISABLE_HMR env var.
-    // Do not modifyâfile watching is disabled to prevent flickering during agent edits.
     if (dev && process.env.DISABLE_HMR === 'true') {
-      config.watchOptions = {
-        ignored: /.*/,
-      };
+      config.watchOptions = { ignored: /.*/ };
     }
     return config;
   },
