@@ -1,10 +1,10 @@
 'use client';
 
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   RefreshCw, ExternalLink, Thermometer,
   Database, Wifi, TrendingUp, TrendingDown,
-  BarChart3, Printer, Monitor
+  BarChart3, Monitor
 } from 'lucide-react';
 import {
   ResponsiveContainer, AreaChart, Area, XAxis,
@@ -12,6 +12,10 @@ import {
 } from 'recharts';
 
 const TEMP_URL = 'http://192.168.150.31/TemperaturaWeb/temperatura.php';
+const CORS_PROXIES = [
+  (url: string) => `https://corsproxy.io/?url=${encodeURIComponent(url)}`,
+  (url: string) => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
+];
 const REFRESH_MS = 3 * 60 * 1000;
 
 interface TempData {
@@ -29,43 +33,59 @@ export default function TemperatureMonitor() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [countdown, setCountdown] = useState(180);
-  const [mode, setMode] = useState<'auto' | 'direct'>('auto');
-  const iframeRef = useRef<HTMLIFrameElement>(null);
+  const [source, setSource] = useState<string>('');
+  const [proxyIndex, setProxyIndex] = useState(0);
 
-  const fetchViaProxy = useCallback(async () => {
-    try {
-      const res = await fetch('/api/temperatura');
-      if (!res.ok) throw new Error('Proxy no disponible');
-      const html = await res.text();
-      return parseHtml(html);
-    } catch { return null; }
-  }, []);
+  const fetchTemperature = useCallback(async (proxyIdx: number): Promise<{ parsed: TempData | null; usedProxy: number }> => {
+    // 1. Try direct fetch (works on HTTP / localhost)
+    if (typeof window !== 'undefined' && window.location.protocol === 'http:') {
+      try {
+        const res = await fetch(TEMP_URL, { cache: 'no-store', signal: AbortSignal.timeout(8000) });
+        if (res.ok) {
+          const html = await res.text();
+          const parsed = parseHtml(html);
+          if (parsed) return { parsed, usedProxy: -1 };
+        }
+      } catch { /* Mixed content or network error on HTTPS */ }
+    }
 
-  const fetchDirect = useCallback(async () => {
-    try {
-      const res = await fetch(TEMP_URL, { cache: 'no-store' });
-      if (!res.ok) throw new Error('HTTP ' + res.status);
-      const html = await res.text();
-      return parseHtml(html);
-    } catch { return null; }
+    // 2. Try CORS proxies (needed on HTTPS / GitHub Pages)
+    for (let i = proxyIdx; i < CORS_PROXIES.length; i++) {
+      try {
+        const proxyUrl = CORS_PROXIES[i](TEMP_URL);
+        const res = await fetch(proxyUrl, { cache: 'no-store', signal: AbortSignal.timeout(12000) });
+        if (res.ok) {
+          const html = await res.text();
+          const parsed = parseHtml(html);
+          if (parsed) return { parsed, usedProxy: i };
+        }
+      } catch { /* Proxy failed, try next */ }
+    }
+
+    return { parsed: null, usedProxy: -2 };
   }, []);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
     setError('');
     try {
-      let parsed = mode === 'auto' ? await fetchViaProxy() : null;
-      if (!parsed) parsed = await fetchDirect();
-      if (!parsed) throw new Error('No se pudo obtener datos');
-      setData(parsed);
-      if (mode === 'auto') setMode('direct');
+      const { parsed, usedProxy } = await fetchTemperature(proxyIndex);
+      if (parsed) {
+        setData(parsed);
+        setProxyIndex(usedProxy >= 0 ? usedProxy : 0);
+        if (usedProxy === -1) setSource('Conexión directa');
+        else setSource(`Proxy CORS #${usedProxy + 1}`);
+      } else {
+        setError('No se pudo obtener datos del servidor de temperaturas.');
+        setData(null);
+      }
     } catch (err: any) {
       setError(err.message || 'Error de conexión');
       setData(null);
     } finally {
       setLoading(false);
     }
-  }, [mode, fetchViaProxy, fetchDirect]);
+  }, [proxyIndex, fetchTemperature]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
@@ -92,6 +112,7 @@ export default function TemperatureMonitor() {
             <p className="text-xs text-neutral-500 mt-1">
               Datos en tiempo real del sistema de sensores
               {data && <span> · {data.sensor} · {data.fecha}</span>}
+              {source && <span className="text-blue-500 ml-2">({source})</span>}
             </p>
           </div>
           <div className="flex items-center gap-3">
@@ -124,7 +145,7 @@ export default function TemperatureMonitor() {
           <div className="flex items-center justify-center h-full">
             <div className="text-center">
               <RefreshCw className="w-8 h-8 text-neutral-400 animate-spin mx-auto mb-3" />
-              <p className="text-xs font-mono uppercase tracking-widest text-neutral-500">Conectando al servidor...</p>
+              <p className="text-xs font-mono uppercase tracking-widest text-neutral-500">Conectando al servidor de temperaturas...</p>
             </div>
           </div>
         )}
@@ -138,13 +159,8 @@ export default function TemperatureMonitor() {
               </div>
               <h3 className="text-sm font-mono uppercase tracking-widest mb-2">Servidor no disponible</h3>
               <p className="text-xs text-neutral-500 mb-6">
-                No se pudo conectar. Esto puede ocurrir si la página está en GitHub Pages (HTTPS) y el servidor es HTTP.
+                No se pudo conectar al servidor de temperaturas (192.168.150.31). El servidor puede estar apagado o sin conexión a internet.
               </p>
-              <div className="bg-amber-50 border border-amber-200 p-4 mb-6 text-left">
-                <p className="text-xs text-amber-800 font-bold mb-1">Solución para ver temperaturas en tu web:</p>
-                <p className="text-xs text-amber-700">1. Ejecuta la app localmente: <code className="bg-amber-100 px-1">npm start</code> y abre <code className="bg-amber-100 px-1">localhost:3000</code></p>
-                <p className="text-xs text-amber-700 mt-1">2. O despliega en Vercel (soporta API routes proxy)</p>
-              </div>
               <div className="flex justify-center gap-3">
                 <button onClick={fetchData} className="px-5 py-2 bg-neutral-900 text-white text-xs font-mono uppercase tracking-widest hover:bg-neutral-800">Reintentar</button>
                 <button onClick={openDirect} className="flex items-center gap-2 px-5 py-2 border border-neutral-300 text-xs font-mono uppercase tracking-widest hover:border-neutral-900">
@@ -183,14 +199,6 @@ export default function TemperatureMonitor() {
                 <h3 className="text-sm font-mono uppercase tracking-widest">
                   Variación de Temperatura — {data.fecha}
                 </h3>
-                <div className="flex gap-2">
-                  <button onClick={openDirect} className="flex items-center gap-1 px-3 py-1 text-[10px] font-mono uppercase tracking-widest bg-blue-500 hover:bg-blue-600 transition-colors">
-                    <Printer className="w-3 h-3" /> Imprimir
-                  </button>
-                  <button onClick={openDirect} className="flex items-center gap-1 px-3 py-1 text-[10px] font-mono uppercase tracking-widest bg-blue-500 hover:bg-blue-600 transition-colors">
-                    <BarChart3 className="w-3 h-3" /> 30 Días
-                  </button>
-                </div>
               </div>
               <div className="p-4" style={{ height: 280 }}>
                 {data.historial.length > 1 ? (
@@ -261,7 +269,6 @@ function parseHtml(html: string): TempData | null {
   const fechaMatch = text.match(/(\d{1,2})\s*[\/\-]\s*(\d{1,2})\s*[\/\-]\s*(\d{2,4})/);
   const fecha = fechaMatch ? `${fechaMatch[1].padStart(2, '0')}/${fechaMatch[2].padStart(2, '0')}/${fechaMatch[3].padStart(4, '0')}` : new Date().toLocaleDateString('es-ES');
 
-  // Extract chart data arrays from JS
   let historial: { hora: string; valor: number }[] = [];
   const arrMatch = html.match(/\[(?:-?\d+[\.,]\d+(?:,\s*)?)+\]/g);
   if (arrMatch) {
