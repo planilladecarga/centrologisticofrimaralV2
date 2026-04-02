@@ -208,7 +208,7 @@ export default function LogisticsDashboard() {
   };
 
   return (
-    <div className="min-h-screen bg-neutral-100 flex text-neutral-900 font-sans selection:bg-neutral-900 selection:text-white relative">
+    <div className="h-screen overflow-hidden bg-neutral-100 flex text-neutral-900 font-sans selection:bg-neutral-900 selection:text-white relative">
       {/* Toast Message */}
       {toastMessage && (
         <div className={`absolute top-4 right-4 z-50 px-6 py-3 shadow-lg text-xs font-mono uppercase tracking-widest ${
@@ -225,7 +225,7 @@ export default function LogisticsDashboard() {
           <p className="text-[10px] font-mono uppercase tracking-widest mt-2 text-neutral-500">Centro Logístico</p>
         </div>
         
-        <nav className="flex-1 py-6 space-y-1">
+        <nav className="flex-1 py-6 space-y-1 overflow-y-auto">
           <button 
             onClick={() => setActiveTab('dashboard')}
             className={`w-full text-left px-6 py-3 text-xs font-mono uppercase tracking-widest transition-colors ${
