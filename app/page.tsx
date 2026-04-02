@@ -276,7 +276,7 @@ export default function LogisticsDashboard() {
             Ayuda / Soporte
           </button>
           <div className="text-[9px] font-mono text-neutral-600 uppercase tracking-widest">
-            v2.0.2 - {new Date().toLocaleTimeString('es-ES', {hour: '2-digit', minute:'2-digit'})}
+            v2.0.3 - VERSIÓN ACTUALIZADA
           </div>
         </div>
       </aside>
