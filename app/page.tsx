@@ -272,9 +272,12 @@ export default function LogisticsDashboard() {
         </nav>
 
         <div className="p-6 border-t border-neutral-900">
-          <button className="w-full text-left text-xs font-mono uppercase tracking-widest hover:text-white transition-colors">
+          <button className="w-full text-left text-xs font-mono uppercase tracking-widest hover:text-white transition-colors mb-4">
             Ayuda / Soporte
           </button>
+          <div className="text-[9px] font-mono text-neutral-600 uppercase tracking-widest">
+            v2.0.2 - {new Date().toLocaleTimeString('es-ES', {hour: '2-digit', minute:'2-digit'})}
+          </div>
         </div>
       </aside>
 
