@@ -2,32 +2,12 @@ import type {NextConfig} from 'next';
 
 const nextConfig: NextConfig = {
   reactStrictMode: true,
-  eslint: {
-    ignoreDuringBuilds: true,
-  },
-  typescript: {
-    ignoreBuildErrors: false,
-  },
-  images: {
-    unoptimized: true,
-    remotePatterns: [
-      {
-        protocol: 'https',
-        hostname: 'picsum.photos',
-        port: '',
-        pathname: '/**',
-      },
-    ],
-  },
-  // API routes require server mode (no static export)
-  // Para deploy: usar Vercel o ejecutar localmente con npm start
+  eslint: { ignoreDuringBuilds: true },
+  typescript: { ignoreBuildErrors: false },
+  images: { unoptimized: true },
+  output: process.env.GITHUB_ACTIONS ? 'export' : undefined,
+  basePath: process.env.GITHUB_ACTIONS ? '/centrologisticofrimaralV2' : undefined,
   transpilePackages: ['motion'],
-  webpack: (config, {dev}) => {
-    if (dev && process.env.DISABLE_HMR === 'true') {
-      config.watchOptions = { ignored: /.*/ };
-    }
-    return config;
-  },
 };
 
 export default nextConfig;
