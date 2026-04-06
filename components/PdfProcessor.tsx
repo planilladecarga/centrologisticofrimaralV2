@@ -24,25 +24,33 @@ interface PdfProcessorProps {
   inventoryData?: InventoryItem[];
 }
 
+interface PalletFromPdf {
+  palletNumber: string;
+  cajas: number;
+  kilos: number;
+}
+
 interface ContainerGroup {
   cliente: string;
-  numeroCliente: string;
-  items: InventoryItem[];
-  totalPallets: number;
-  totalCantidad: number;
-  totalKilos: number;
+  items: {
+    inventoryItem: InventoryItem;
+    pdfPallets: PalletFromPdf[];
+  }[];
+  totalPdfCajas: number;
+  totalPdfKilos: number;
+  totalInvKilos: number;
 }
 
 export default function PdfProcessor({ inventoryData = [] }: PdfProcessorProps) {
-  const [extractedIds, setExtractedIds] = useState<string[]>([]);
+  const [pdfPallets, setPdfPallets] = useState<PalletFromPdf[]>([]);
   const [manualIds, setManualIds] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+  const [fileName, setFileName] = useState('');
 
   const [results, setResults] = useState<{
-    foundItems: InventoryItem[];
-    missingIds: string[];
-    matchedIds: { id: string; matchedField: string }[];
+    foundItems: { item: InventoryItem; pdfPallets: PalletFromPdf[] }[];
+    missingPallets: PalletFromPdf[];
   } | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -59,30 +67,41 @@ export default function PdfProcessor({ inventoryData = [] }: PdfProcessorProps) 
     }
   }, []);
 
-  // Group found items by container (cliente + numeroCliente)
+  // Group found items by container (cliente)
   const containerGroups = useMemo<ContainerGroup[]>(() => {
     if (!results || results.foundItems.length === 0) return [];
 
     const groupMap = new Map<string, ContainerGroup>();
-    const groupKey = (item: InventoryItem) => `${item.cliente}|||${item.numeroCliente}`;
 
-    results.foundItems.forEach(item => {
-      const key = groupKey(item);
+    results.foundItems.forEach(({ item, pdfPallets: pdfs }) => {
+      const key = item.cliente;
       if (groupMap.has(key)) {
         const group = groupMap.get(key)!;
-        group.items.push(item);
-        group.totalPallets += Number(item.pallets) || 0;
-        group.totalCantidad += Number(item.cantidad) || 0;
-        group.totalKilos += Number(item.kilos) || 0;
-      } else {
-        groupMap.set(key, {
-          cliente: item.cliente,
-          numeroCliente: item.numeroCliente,
-          items: [item],
-          totalPallets: Number(item.pallets) || 0,
-          totalCantidad: Number(item.cantidad) || 0,
-          totalKilos: Number(item.kilos) || 0,
+        // Check if we already have this exact item
+        const existing = group.items.find(ei => (ei.inventoryItem.id || '') === (item.id || ''));
+        if (existing) {
+          existing.pdfPallets.push(...pdfs);
+        } else {
+          group.items.push({ inventoryItem: item, pdfPallets: pdfs });
+        }
+        pdfs.forEach(p => {
+          group.totalPdfCajas += p.cajas;
+          group.totalPdfKilos += p.kilos;
         });
+        group.totalInvKilos += Number(item.kilos) || 0;
+      } else {
+        const newGroup: ContainerGroup = {
+          cliente: key,
+          items: [{ inventoryItem: item, pdfPallets: pdfs }],
+          totalPdfCajas: 0,
+          totalPdfKilos: 0,
+          totalInvKilos: Number(item.kilos) || 0,
+        };
+        pdfs.forEach(p => {
+          newGroup.totalPdfCajas += p.cajas;
+          newGroup.totalPdfKilos += p.kilos;
+        });
+        groupMap.set(key, newGroup);
       }
     });
 
@@ -98,98 +117,104 @@ export default function PdfProcessor({ inventoryData = [] }: PdfProcessorProps) 
     });
   };
 
-  // Check if a string looks like a year (4 digits between 2000-2099)
-  const isLikelyYear = (str: string) => {
-    const cleaned = str.replace(/[^0-9]/g, '');
-    if (cleaned.length === 4 && /^[2][0-9]{3}$/.test(cleaned)) {
-      const year = parseInt(cleaned);
-      return year >= 2000 && year <= 2099;
-    }
-    return false;
-  };
-
-  const fuzzyMatch = (searchId: string, targetId: string, field?: string): boolean => {
-    if (!searchId || !targetId) return false;
-    const s = String(searchId).trim();
-    const t = String(targetId).trim();
-    if (!s || !t) return false;
-
-    // Exact match
-    if (s.toLowerCase() === t.toLowerCase()) return true;
-
-    // Strip leading zeros and compare
-    const sNoZeros = s.replace(/^0+/, '');
-    const tNoZeros = t.replace(/^0+/, '');
-    if (sNoZeros && sNoZeros.toLowerCase() === tNoZeros.toLowerCase()) return true;
-
-    // For numeric-only search terms: only match if it's not a year OR the target is also numeric-only
-    const sIsNumeric = /^\d+$/.test(sNoZeros);
-    if (sIsNumeric && isLikelyYear(s)) {
-      // Year-like searches should only match numeroCliente fields that are the exact year
-      // NOT match inside product descriptions or client names
-      if (field === 'numeroCliente' && tNoZeros === sNoZeros) return true;
-      return false; // Don't match years against other fields
-    }
-
-    // For short numeric searches (< 5 digits): prefer exact or near-exact matches only
-    if (sIsNumeric && sNoZeros.length < 5) {
-      if (tNoZeros === sNoZeros) return true;
-      // Only do contains if the target is a pure number (numeroCliente, pallets, etc.)
-      if (/^\d+$/.test(tNoZeros) && tNoZeros.includes(sNoZeros)) return true;
-      // For non-numeric targets, don't do substring matching on short numbers
-      return false;
-    }
-
-    // For longer alphanumeric searches (>= 5 chars): allow substring matching on all fields
-    const sLow = s.toLowerCase();
-    const tLow = t.toLowerCase();
-    if (sLow.length >= 5) {
-      if (tLow.includes(sLow) || sLow.includes(tLow)) return true;
-      // Strip non-alphanumeric and compare
-      const sStripped = s.replace(/[^a-z0-9]/gi, '');
-      const tStripped = t.replace(/[^a-z0-9]/gi, '');
-      if (sStripped.length >= 5 && tStripped.length >= 5) {
-        if (tStripped.includes(sStripped) || sStripped.includes(tStripped)) return true;
-      }
-    }
-
-    return false;
-  };
-
-  const extractTextFromPdf = async (file: File) => {
+  // Extract text from PDF page 2 only
+  const extractPage2FromPdf = async (file: File): Promise<string> => {
     if (!window.pdfjsLib) {
       throw new Error("PDF.js no ha cargado todavía. Por favor, espera un segundo.");
     }
     const arrayBuffer = await file.arrayBuffer();
     const pdf = await window.pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-    let fullText = '';
-    for (let i = 1; i <= pdf.numPages; i++) {
-      const page = await pdf.getPage(i);
-      const textContent = await page.getTextContent();
-      const pageText = textContent.items.map((item: any) => item.str).join(' ');
-      fullText += pageText + ' ';
+
+    if (pdf.numPages < 2) {
+      throw new Error("El PDF tiene menos de 2 páginas. Se necesita la segunda hoja con los pallets.");
     }
-    return fullText;
+
+    const page = await pdf.getPage(2); // Page 2 only
+    const textContent = await page.getTextContent();
+    return textContent.items.map((item: any) => item.str).join(' ');
+  };
+
+  // Parse pallet numbers, cajas and kilos from PDF text
+  const parsePalletsFromText = (text: string): PalletFromPdf[] => {
+    const pallets: PalletFromPdf[] = [];
+
+    // Pattern: 6-digit pallet number followed by numbers (cajas and kilos)
+    // The text looks like: "286554 69 1032,89" or "286554                             69  1032,89"
+    // We match 6-digit numbers that are NOT years (2000-2099) followed by numeric data
+    const palletRegex = /\b([2-9]\d{5}|1[0-9]{5})\b/g;
+    const allNumbers: { num: string; index: number }[] = [];
+
+    let match;
+    while ((match = palletRegex.exec(text)) !== null) {
+      const num = match[1];
+      const parsedNum = parseInt(num);
+      // Skip years (2000-2099 have only 4 digits, so 6-digit numbers won't match)
+      allNumbers.push({ num, index: match.index });
+    }
+
+    // For each 6-digit number, check if it's followed by 2 numbers (cajas, kilos)
+    // Extract all numbers after each potential pallet
+    for (let i = 0; i < allNumbers.length; i++) {
+      const { num, index } = allNumbers[i];
+      // Get the text after this pallet number
+      const afterText = text.substring(index + num.length);
+
+      // Find the next 2 numbers after this pallet (cajas and kilos)
+      const numberPattern = /(\d+[\.,]?\d*)/g;
+      const followingNumbers: number[] = [];
+      let numMatch;
+      let searchOffset = 0;
+
+      while ((numMatch = numberPattern.exec(afterText)) !== null && followingNumbers.length < 2) {
+        const val = parseFloat(numMatch[1].replace(',', '.'));
+        if (!isNaN(val) && val > 0 && val < 100000) {
+          followingNumbers.push(val);
+        }
+        searchOffset = numMatch.index + numMatch[0].length;
+      }
+
+      if (followingNumbers.length >= 2) {
+        const cajas = Math.round(followingNumbers[0]);
+        const kilos = followingNumbers[1];
+
+        // Skip if kilos seem unreasonably large (> 50000) or cajas > 10000
+        if (cajas <= 10000 && kilos <= 50000) {
+          // Check it's not a duplicate
+          if (!pallets.some(p => p.palletNumber === num)) {
+            pallets.push({ palletNumber: num, cajas, kilos });
+          }
+        }
+      } else if (followingNumbers.length === 1) {
+        // Only one number found — use as cajas, no kilos
+        const cajas = Math.round(followingNumbers[0]);
+        if (cajas <= 10000 && !pallets.some(p => p.palletNumber === num)) {
+          pallets.push({ palletNumber: num, cajas, kilos: 0 });
+        }
+      }
+    }
+
+    return pallets;
   };
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files;
-    if (!files || files.length === 0) return;
+    const file = e.target.files?.[0];
+    if (!file) return;
     setIsProcessing(true);
+    setResults(null);
+    setFileName(file.name);
     try {
-      let allText = '';
-      for (let i = 0; i < files.length; i++) {
-        const text = await extractTextFromPdf(files[i]);
-        allText += text + ' ';
+      const text = await extractPage2FromPdf(file);
+      console.log('PDF Page 2 text:', text.substring(0, 2000));
+      const parsed = parsePalletsFromText(text);
+      console.log('Parsed pallets:', parsed);
+      setPdfPallets(parsed);
+
+      if (parsed.length === 0) {
+        alert("No se encontraron pallets en la segunda hoja del PDF. Verifica que el formato sea: Número de Pallet, Cajas, Kilos.");
       }
-      // Extract alphanumeric tokens that have at least 4 characters and some digits
-      const regex = /\b[A-Za-z0-9]*\d{4,}[A-Za-z0-9]*\b/g;
-      const matches = allText.match(regex) || [];
-      const uniqueIds = Array.from(new Set(matches)).filter(id => !isLikelyYear(id));
-      setExtractedIds(prev => Array.from(new Set([...prev, ...uniqueIds])));
-    } catch (error) {
-      console.error("Error processing PDFs:", error);
-      alert("Error al procesar los archivos PDF.");
+    } catch (error: any) {
+      console.error("Error processing PDF:", error);
+      alert(error.message || "Error al procesar el archivo PDF.");
     } finally {
       setIsProcessing(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
@@ -197,11 +222,22 @@ export default function PdfProcessor({ inventoryData = [] }: PdfProcessorProps) 
   };
 
   const processData = () => {
-    const manualIdsList = manualIds.split(/[\s,;]+/).filter(id => id.trim().length > 0);
-    const allSearchIds = Array.from(new Set([...extractedIds, ...manualIdsList]));
+    const manualIdsList = manualIds.split(/[\s,;]+/).filter(id => id.trim().length > 0).map(id => ({
+      palletNumber: id.trim(),
+      cajas: 0,
+      kilos: 0,
+    }));
 
-    if (allSearchIds.length === 0) {
-      alert("No hay IDs para buscar.");
+    const allPallets = [...pdfPallets];
+    // Add manual IDs that aren't already from PDF
+    manualIdsList.forEach(mp => {
+      if (!allPallets.some(p => p.palletNumber === mp.palletNumber)) {
+        allPallets.push(mp);
+      }
+    });
+
+    if (allPallets.length === 0) {
+      alert("No hay pallets para buscar. Carga un PDF o ingresa números manualmente.");
       return;
     }
 
@@ -210,84 +246,47 @@ export default function PdfProcessor({ inventoryData = [] }: PdfProcessorProps) 
       return;
     }
 
-    const foundItems: InventoryItem[] = [];
-    const missingIds: string[] = [];
-    const matchedIds: { id: string; matchedField: string }[] = [];
-    const foundKeys = new Set<string>();
+    const foundItems: { item: InventoryItem; pdfPallets: PalletFromPdf[] }[] = [];
+    const missingPallets: PalletFromPdf[] = [];
+    const foundInventoryKeys = new Set<string>();
 
-    allSearchIds.forEach(searchId => {
-      let matchFound = false;
+    allPallets.forEach(pallet => {
+      const searchNum = pallet.palletNumber.replace(/^0+/, '');
+      let matched = false;
 
-      // Priority 1: Match against numeroCliente (lot number) — most important
-      for (const item of inventoryData) {
-        if (fuzzyMatch(searchId, item.numeroCliente, 'numeroCliente')) {
-          const key = item.id || `${item.numeroCliente}-${item.producto}`;
-          if (!foundKeys.has(key)) {
-            foundKeys.add(key);
-            foundItems.push(item);
-            matchedIds.push({ id: searchId, matchedField: 'numeroCliente' });
+      // Match against numeroCliente (pallet/lot number in inventory)
+      for (const invItem of inventoryData) {
+        const targetNum = String(invItem.numeroCliente).trim().replace(/^0+/, '');
+        const targetStripped = targetNum.replace(/[^0-9]/g, '');
+        const searchStripped = searchNum.replace(/[^0-9]/g, '');
+
+        if (targetStripped === searchStripped || targetNum === searchNum) {
+          const key = invItem.id || `${invItem.numeroCliente}-${invItem.producto}`;
+          const existing = foundItems.find(f => (f.item.id || '') === (invItem.id || ''));
+          if (existing) {
+            if (!existing.pdfPallets.some(p => p.palletNumber === pallet.palletNumber)) {
+              existing.pdfPallets.push(pallet);
+            }
+          } else {
+            foundItems.push({ item: invItem, pdfPallets: [pallet] });
           }
-          matchFound = true;
-          break;
-        }
-      }
-      if (matchFound) return;
-
-      // Priority 2: Match against cliente name
-      for (const item of inventoryData) {
-        if (fuzzyMatch(searchId, item.cliente, 'cliente')) {
-          const key = item.id || `${item.numeroCliente}-${item.producto}`;
-          if (!foundKeys.has(key)) {
-            foundKeys.add(key);
-            foundItems.push(item);
-            matchedIds.push({ id: searchId, matchedField: 'cliente' });
-          }
-          matchFound = true;
-          break;
-        }
-      }
-      if (matchFound) return;
-
-      // Priority 3: Match against producto (longer strings, more context)
-      for (const item of inventoryData) {
-        if (fuzzyMatch(searchId, item.producto, 'producto')) {
-          const key = item.id || `${item.numeroCliente}-${item.producto}`;
-          if (!foundKeys.has(key)) {
-            foundKeys.add(key);
-            foundItems.push(item);
-            matchedIds.push({ id: searchId, matchedField: 'producto' });
-          }
-          matchFound = true;
-          break;
-        }
-      }
-      if (matchFound) return;
-
-      // Priority 4: Match against pallets number (strict numeric only)
-      for (const item of inventoryData) {
-        if (fuzzyMatch(searchId, String(item.pallets), 'pallets')) {
-          const key = item.id || `${item.numeroCliente}-${item.producto}`;
-          if (!foundKeys.has(key)) {
-            foundKeys.add(key);
-            foundItems.push(item);
-            matchedIds.push({ id: searchId, matchedField: 'pallets' });
-          }
-          matchFound = true;
+          foundInventoryKeys.add(key);
+          matched = true;
           break;
         }
       }
 
-      if (!matchFound) {
-        missingIds.push(searchId);
+      if (!matched) {
+        missingPallets.push(pallet);
       }
     });
 
-    setResults({ foundItems, missingIds, matchedIds });
+    setResults({ foundItems, missingPallets });
 
-    // Auto-expand all groups when results come in
+    // Auto-expand all groups
     if (foundItems.length > 0) {
       const allKeys = new Set<string>();
-      foundItems.forEach(item => allKeys.add(`${item.cliente}|||${item.numeroCliente}`));
+      foundItems.forEach(({ item }) => allKeys.add(item.cliente));
       setExpandedGroups(allKeys);
     }
   };
@@ -297,117 +296,142 @@ export default function PdfProcessor({ inventoryData = [] }: PdfProcessorProps) 
 
     const wb = XLSX.utils.book_new();
     const wsData: any[][] = [];
-    const highlightRows: number[] = [];
     let currentRow = 0;
 
     // Title
-    wsData.push(["PLANILLA DE CARGA — DESPACHOS POR CONTENEDOR", "", "", "", "", ""]);
-    highlightRows.push(currentRow);
+    wsData.push([`PLANILLA DE CARGA${fileName ? ' — ' + fileName : ''}`, '', '', '', '']);
     currentRow++;
     wsData.push([]);
     currentRow++;
 
+    const containerStyle = {
+      fill: { fgColor: { rgb: "1A1A1A" } },
+      font: { bold: true, color: { rgb: "FFFFFF" }, sz: 11 },
+      border: { top: { style: "thin", color: { rgb: "000000" } }, bottom: { style: "thin", color: { rgb: "000000" } }, left: { style: "thin", color: { rgb: "000000" } }, right: { style: "thin", color: { rgb: "000000" } } },
+    };
+    const headerStyle = {
+      fill: { fgColor: { rgb: "E0E0E0" } },
+      font: { bold: true, sz: 10 },
+      border: { top: { style: "thin", color: { rgb: "000000" } }, bottom: { style: "thin", color: { rgb: "000000" } }, left: { style: "thin", color: { rgb: "000000" } }, right: { style: "thin", color: { rgb: "000000" } } },
+      alignment: { horizontal: "center", vertical: "center" }
+    };
+    const dataBorder = {
+      top: { style: "thin", color: { rgb: "CCCCCC" } }, bottom: { style: "thin", color: { rgb: "CCCCCC" } },
+      left: { style: "thin", color: { rgb: "CCCCCC" } }, right: { style: "thin", color: { rgb: "CCCCCC" } }
+    };
+
     containerGroups.forEach((group, groupIdx) => {
       // Container header
-      wsData.push([`CONTENEDOR ${groupIdx + 1}: ${group.cliente}`, `LOTE: ${group.numeroCliente}`, '', '', `Total Pallets: ${group.totalPallets}`, `${group.totalKilos.toFixed(1)} KG`]);
-      highlightRows.push(currentRow);
+      wsData.push([`CONTENEDOR ${groupIdx + 1}: ${group.cliente}`, '', '', '', '']);
       currentRow++;
 
       // Column headers
-      wsData.push(['Producto', 'Pallets', 'Cantidad', 'Kilos', '', '']);
-      const headerRow = currentRow;
-      highlightRows.push(currentRow);
+      wsData.push(['No. Pallet', 'Producto', 'Cajas (PDF)', 'Kilos (PDF)', 'Kilos (Inv)']);
       currentRow++;
 
       // Items
-      group.items.forEach(item => {
-        wsData.push([item.producto, item.pallets, item.cantidad, `${item.kilos} KG`, '', '']);
-        currentRow++;
+      group.items.forEach(({ inventoryItem, pdfPallets }) => {
+        pdfPallets.forEach(pallet => {
+          wsData.push([pallet.palletNumber, inventoryItem.producto, pallet.cajas, pallet.kilos, inventoryItem.kilos]);
+          currentRow++;
+        });
       });
 
       // Subtotal
-      wsData.push(['SUBTOTAL', group.totalPallets, group.totalCantidad, `${group.totalKilos.toFixed(1)} KG`, '', '']);
+      wsData.push(['SUBTOTAL', `${group.items.length} pallets`, group.totalPdfCajas, `${group.totalPdfKilos.toFixed(2)} KG`, `${group.totalInvKilos.toFixed(2)} KG`]);
       currentRow++;
       wsData.push([]);
       currentRow++;
     });
 
-    // Summary
-    const grandTotalPallets = containerGroups.reduce((s, g) => s + g.totalPallets, 0);
-    const grandTotalKilos = containerGroups.reduce((s, g) => s + g.totalKilos, 0);
-    wsData.push(['RESUMEN TOTAL', `${containerGroups.length} Contenedores`, `${grandTotalPallets} Pallets`, `${grandTotalKilos.toFixed(1)} KG`, '', '']);
+    // Grand total
+    const grandCajas = containerGroups.reduce((s, g) => s + g.totalPdfCajas, 0);
+    const grandKilosPdf = containerGroups.reduce((s, g) => s + g.totalPdfKilos, 0);
+    const grandKilosInv = containerGroups.reduce((s, g) => s + g.totalInvKilos, 0);
+    wsData.push(['RESUMEN TOTAL', `${containerGroups.length} Contenedores`, grandCajas, `${grandKilosPdf.toFixed(2)} KG`, `${grandKilosInv.toFixed(2)} KG`]);
 
     const ws = XLSX.utils.aoa_to_sheet(wsData);
-    ws['!merges'] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: 5 } }];
+    ws['!merges'] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: 4 } }];
     ws['A1'].s = { font: { bold: true, sz: 14, color: { rgb: "1A1A1A" } }, alignment: { horizontal: "center", vertical: "center" } };
 
-    const containerHeaderStyle = {
-      fill: { fgColor: { rgb: "1A1A1A" } },
-      font: { bold: true, color: { rgb: "FFFFFF" }, sz: 11 },
-      border: { top: { style: "thin", color: { rgb: "000000" } }, bottom: { style: "thin", color: { rgb: "000000" } }, left: { style: "thin", color: { rgb: "000000" } }, right: { style: "thin", color: { rgb: "000000" } } },
-    };
+    // Apply styles
+    let rowIdx = 0;
+    let groupCounter = 0;
+    containerGroups.forEach((group) => {
+      // Container header row
+      const colKeys = ['A', 'B', 'C', 'D', 'E'];
+      colKeys.forEach(col => {
+        const cellRef = `${col}${rowIdx + 1}`;
+        if (ws[cellRef]) ws[cellRef].s = containerStyle;
+      });
+      rowIdx++;
+      // Column header row
+      colKeys.forEach(col => {
+        const cellRef = `${col}${rowIdx + 1}`;
+        if (ws[cellRef]) ws[cellRef].s = headerStyle;
+      });
+      rowIdx++;
+      // Data rows
+      group.items.forEach(({ pdfPallets }) => {
+        pdfPallets.forEach(() => {
+          colKeys.forEach(col => {
+            const cellRef = `${col}${rowIdx + 1}`;
+            if (!ws[cellRef]) ws[cellRef] = { t: 's', v: '' };
+            ws[cellRef].s = { border: dataBorder };
+          });
+          rowIdx++;
+        });
+      });
+      // Subtotal row
+      colKeys.forEach(col => {
+        const cellRef = `${col}${rowIdx + 1}`;
+        if (ws[cellRef]) ws[cellRef].s = { ...dataBorder, font: { bold: true } };
+      });
+      rowIdx += 2; // subtotal + empty row
+      groupCounter++;
+    });
 
-    const dataBorderStyle = {
-      top: { style: "thin", color: { rgb: "CCCCCC" } }, bottom: { style: "thin", color: { rgb: "CCCCCC" } },
-      left: { style: "thin", color: { rgb: "CCCCCC" } }, right: { style: "thin", color: { rgb: "CCCCCC" } }
-    };
-
-    for (let r = 0; r < wsData.length; r++) {
-      for (let c = 0; c < 6; c++) {
-        const cellRef = XLSX.utils.encode_cell({ r, c });
-        if (!ws[cellRef]) ws[cellRef] = { t: 's', v: '' };
-
-        if (highlightRows.includes(r)) {
-          // Check if it's a container header (even index in highlightRows after title)
-          ws[cellRef].s = { ...containerHeaderStyle };
-        } else {
-          ws[cellRef].s = { border: dataBorderStyle };
-        }
-      }
-    }
-
-    ws['!cols'] = [{ wch: 40 }, { wch: 20 }, { wch: 14 }, { wch: 14 }, { wch: 18 }, { wch: 18 }];
+    ws['!cols'] = [{ wch: 16 }, { wch: 35 }, { wch: 14 }, { wch: 16 }, { wch: 16 }];
     XLSX.utils.book_append_sheet(wb, ws, "Planilla de Carga");
 
-    // Missing IDs sheet
-    if (results.missingIds.length > 0) {
-      const wsMissingData = [['IDs No Encontrados'], [''], ['ID', 'Observación']];
-      results.missingIds.forEach(id => {
-        const isYear = isLikelyYear(id);
-        wsMissingData.push([id, isYear ? '(parece ser un año, no un lote)' : '']);
-      });
+    // Missing pallets
+    if (results.missingPallets.length > 0) {
+      const wsMissingData = [['Pallets No Encontrados en Inventario'], [''], ['Pallet', 'Cajas', 'Kilos']];
+      results.missingPallets.forEach(p => wsMissingData.push([p.palletNumber, String(p.cajas), String(p.kilos)]));
       const wsMissing = XLSX.utils.aoa_to_sheet(wsMissingData);
       wsMissing['A1'].s = { font: { bold: true, sz: 12 } };
-      wsMissing['!cols'] = [{ wch: 30 }, { wch: 40 }];
+      wsMissing['!cols'] = [{ wch: 20 }, { wch: 12 }, { wch: 14 }];
       XLSX.utils.book_append_sheet(wb, wsMissing, "No Encontrados");
     }
 
     XLSX.writeFile(wb, "Planilla_de_Carga.xlsx");
   };
 
-  const clearResults = () => {
+  const clearAll = () => {
     setResults(null);
-    setExtractedIds([]);
+    setPdfPallets([]);
     setManualIds('');
     setExpandedGroups(new Set());
+    setFileName('');
   };
 
   return (
     <div className="flex flex-col h-full bg-white border border-neutral-200">
+      {/* Header */}
       <div className="p-6 border-b border-neutral-200 bg-neutral-50 flex justify-between items-center flex-shrink-0">
         <div>
           <h2 className="text-lg font-mono uppercase tracking-widest text-neutral-900 flex items-center gap-2">
             <Package className="w-5 h-5 text-neutral-600" />
-            Despachos — Búsqueda por Contenedor
+            Despachos
           </h2>
           <p className="text-xs font-sans text-neutral-500 mt-1">
-            Busca lotes/pallets en el inventario. Resultados agrupados por contenedor. Inventario: {inventoryData.length} ítems.
+            Carga PDF → extrae pallets de la 2da hoja → cruza con inventario. Inventario: {inventoryData.length} ítems.
           </p>
         </div>
         <div className="flex items-center gap-3">
           {results && (
             <>
-              <button onClick={clearResults}
+              <button onClick={clearAll}
                 className="px-4 py-2 text-xs font-mono uppercase tracking-widest border border-neutral-300 hover:border-neutral-900 transition-colors">
                 Limpiar
               </button>
@@ -427,63 +451,92 @@ export default function PdfProcessor({ inventoryData = [] }: PdfProcessorProps) 
           </div>
         )}
 
+        {/* Upload + Search */}
         {!results && (
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {/* PDF Upload */}
             <div className="border border-neutral-200 p-6 bg-white">
-              <h3 className="text-xs font-mono uppercase tracking-widest text-neutral-900 mb-4 flex items-center gap-2">
-                <FileText className="w-4 h-4" /> 1. Cargar PDFs (opcional)
+              <h3 className="text-xs font-mono uppercase tracking-widest text-neutral-900 mb-2 flex items-center gap-2">
+                <FileText className="w-4 h-4" /> 1. Cargar PDF de Despacho
               </h3>
+              <p className="text-[10px] font-sans text-neutral-500 mb-4">
+                Se lee la SEGUNDA HOJA del PDF para extraer los pallets.
+              </p>
               <div className="flex items-center justify-center w-full">
                 <label className="flex flex-col items-center justify-center w-full h-28 border-2 border-neutral-300 border-dashed bg-neutral-50 hover:bg-neutral-100 cursor-pointer transition-colors">
                   <div className="flex flex-col items-center justify-center pt-4 pb-4">
                     <Upload className="w-6 h-6 text-neutral-400 mb-2" />
                     <p className="text-xs font-mono text-neutral-500 uppercase tracking-widest">
-                      {isProcessing ? 'Procesando...' : 'Click para subir PDFs'}
+                      {isProcessing ? 'Extrayendo pallets...' : 'Click para subir PDF'}
                     </p>
                   </div>
-                  <input type="file" className="hidden" multiple accept=".pdf" onChange={handleFileUpload}
+                  <input type="file" className="hidden" accept=".pdf" onChange={handleFileUpload}
                     ref={fileInputRef} disabled={isProcessing} />
                 </label>
               </div>
-              {extractedIds.length > 0 && (
+
+              {/* Extracted pallets preview */}
+              {pdfPallets.length > 0 && (
                 <div className="mt-4">
-                  <p className="text-[10px] font-mono uppercase tracking-widest text-green-600">
-                    {extractedIds.length} IDs extraídos de PDFs
+                  <p className="text-[10px] font-mono uppercase tracking-widest text-green-600 mb-2">
+                    {pdfPallets.length} pallets extraídos de {fileName}
                   </p>
-                  <div className="mt-2 flex flex-wrap gap-1 max-h-24 overflow-y-auto p-2 border border-neutral-100 bg-neutral-50">
-                    {extractedIds.map((id, i) => (
-                      <span key={i} className="text-[10px] font-mono bg-white border border-neutral-200 px-1.5 py-0.5">{id}</span>
-                    ))}
+                  <div className="max-h-40 overflow-auto border border-neutral-200">
+                    <table className="w-full text-left text-[10px] font-mono">
+                      <thead className="bg-neutral-50 text-neutral-500 uppercase tracking-widest sticky top-0">
+                        <tr>
+                          <th className="p-2 border-b border-neutral-200">Pallet</th>
+                          <th className="p-2 border-b border-neutral-200 text-right">Cajas</th>
+                          <th className="p-2 border-b border-neutral-200 text-right">Kilos</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-neutral-100">
+                        {pdfPallets.map((p, i) => (
+                          <tr key={i} className="hover:bg-neutral-50">
+                            <td className="p-2 font-medium text-neutral-900">{p.palletNumber}</td>
+                            <td className="p-2 text-right">{p.cajas}</td>
+                            <td className="p-2 text-right">{p.kilos.toFixed(2)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
                   </div>
                 </div>
               )}
             </div>
 
+            {/* Manual + Process */}
             <div className="border border-neutral-200 p-6 bg-white flex flex-col">
-              <h3 className="text-xs font-mono uppercase tracking-widest text-neutral-900 mb-4 flex items-center gap-2">
-                <Search className="w-4 h-4" /> 2. Buscar Lotes / Pallets
+              <h3 className="text-xs font-mono uppercase tracking-widest text-neutral-900 mb-2 flex items-center gap-2">
+                <Search className="w-4 h-4" /> 2. Buscar en Inventario
               </h3>
+              <p className="text-[10px] font-sans text-neutral-500 mb-4">
+                Busca los pallets contra el inventario para ver a qué contenedor pertenecen.
+              </p>
               <textarea
                 className="w-full flex-1 p-3 text-xs font-mono bg-neutral-50 border border-neutral-200 focus:border-neutral-900 outline-none transition-colors resize-none mb-3"
-                placeholder={"Ingresa números de lote/pallet separados por comas, espacios o punto y coma.\n\nEjemplo: 259519, 259520, ABC-123\n\nNota: Los años (ej: 2025) se excluyen automáticamente de la búsqueda."}
+                placeholder={"O ingresa pallets manualmente (separados por comas o espacios):\n\nEjemplo: 286554, 287450, 288029"}
                 value={manualIds} onChange={(e) => setManualIds(e.target.value)} />
               <button onClick={processData}
-                disabled={isProcessing || (extractedIds.length === 0 && manualIds.trim() === '') || inventoryData.length === 0}
+                disabled={isProcessing || (pdfPallets.length === 0 && manualIds.trim() === '') || inventoryData.length === 0}
                 className="w-full py-3 bg-neutral-900 text-white text-xs font-mono uppercase tracking-widest hover:bg-neutral-800 transition-colors disabled:bg-neutral-300 disabled:cursor-not-allowed">
-                Buscar en Inventario
+                {pdfPallets.length > 0
+                  ? `Buscar ${pdfPallets.length} pallets en Inventario`
+                  : 'Buscar en Inventario'}
               </button>
             </div>
           </div>
         )}
 
+        {/* Results */}
         {results && (
           <div className="flex flex-col gap-6">
             {/* Summary Cards */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
               <div className="border border-green-200 bg-green-50 p-4 flex items-center gap-4">
                 <div className="p-3 bg-green-100 text-green-700 rounded-full"><CheckCircle className="w-6 h-6" /></div>
                 <div>
-                  <p className="text-[10px] font-mono uppercase tracking-widest text-green-700">Ítems Encontrados</p>
+                  <p className="text-[10px] font-mono uppercase tracking-widest text-green-700">Pallets Encontrados</p>
                   <p className="text-2xl font-light text-green-900">{results.foundItems.length}</p>
                 </div>
               </div>
@@ -498,22 +551,41 @@ export default function PdfProcessor({ inventoryData = [] }: PdfProcessorProps) 
                 <div className="p-3 bg-red-100 text-red-700 rounded-full"><AlertCircle className="w-6 h-6" /></div>
                 <div>
                   <p className="text-[10px] font-mono uppercase tracking-widest text-red-700">No Encontrados</p>
-                  <p className="text-2xl font-light text-red-900">{results.missingIds.length}</p>
+                  <p className="text-2xl font-light text-red-900">{results.missingPallets.length}</p>
+                </div>
+              </div>
+              <div className="border border-neutral-200 bg-neutral-50 p-4 flex items-center gap-4">
+                <div className="p-3 bg-neutral-200 text-neutral-700 rounded-full"><Package className="w-6 h-6" /></div>
+                <div>
+                  <p className="text-[10px] font-mono uppercase tracking-widest text-neutral-700">Total Cajas</p>
+                  <p className="text-2xl font-light text-neutral-900">{containerGroups.reduce((s, g) => s + g.totalPdfCajas, 0)}</p>
                 </div>
               </div>
             </div>
 
-            {/* Missing IDs */}
-            {results.missingIds.length > 0 && (
+            {/* Missing Pallets */}
+            {results.missingPallets.length > 0 && (
               <div className="border border-red-200 bg-red-50 p-4">
-                <h4 className="text-xs font-mono uppercase tracking-widest text-red-900 mb-2">IDs No Encontrados:</h4>
-                <div className="flex flex-wrap gap-2">
-                  {results.missingIds.map((id, i) => (
-                    <span key={i} className="text-[10px] font-mono bg-white border border-red-200 text-red-700 px-2 py-1">
-                      {id}
-                      {isLikelyYear(id) && <span className="text-red-400 ml-1">(año)</span>}
-                    </span>
-                  ))}
+                <h4 className="text-xs font-mono uppercase tracking-widest text-red-900 mb-3">Pallets No Encontrados en Inventario:</h4>
+                <div className="max-h-32 overflow-auto">
+                  <table className="w-full text-left text-[10px] font-mono">
+                    <thead className="text-red-700 uppercase tracking-widest sticky top-0 bg-red-50">
+                      <tr>
+                        <th className="p-2">Pallet</th>
+                        <th className="p-2 text-right">Cajas</th>
+                        <th className="p-2 text-right">Kilos</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-red-100">
+                      {results.missingPallets.map((p, i) => (
+                        <tr key={i}>
+                          <td className="p-2 text-red-800">{p.palletNumber}</td>
+                          <td className="p-2 text-right text-red-600">{p.cajas}</td>
+                          <td className="p-2 text-right text-red-600">{p.kilos.toFixed(2)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
               </div>
             )}
@@ -526,16 +598,16 @@ export default function PdfProcessor({ inventoryData = [] }: PdfProcessorProps) 
                     Resultados por Contenedor
                   </h3>
                   <p className="text-[10px] font-sans text-neutral-500 mt-1">
-                    {containerGroups.length} contenedor{containerGroups.length !== 1 ? 'es' : ''} encontrado{containerGroups.length !== 1 ? 's' : ''} — Click en un contenedor para expandir/colapsar
+                    {containerGroups.length} contenedor{containerGroups.length !== 1 ? 'es' : ''} — Click para expandir/colapsar
                   </p>
                 </div>
 
                 <div className="divide-y divide-neutral-200">
                   {containerGroups.map((group, groupIdx) => {
-                    const groupKey = `${group.cliente}|||${group.numeroCliente}`;
+                    const groupKey = group.cliente;
                     const isExpanded = expandedGroups.has(groupKey);
                     return (
-                      <div key={groupKey} className="border-b border-neutral-200 last:border-b-0">
+                      <div key={groupKey}>
                         {/* Container Header */}
                         <button
                           onClick={() => toggleGroup(groupKey)}
@@ -552,14 +624,13 @@ export default function PdfProcessor({ inventoryData = [] }: PdfProcessorProps) 
                                   {group.cliente}
                                 </span>
                                 <span className="px-2 py-0.5 bg-blue-100 text-blue-800 text-[10px] font-mono uppercase tracking-widest">
-                                  LOTE: {group.numeroCliente}
+                                  {group.items.length} pallet{group.items.length !== 1 ? 's' : ''}
                                 </span>
                               </div>
                               <div className="flex items-center gap-4 mt-1 text-[10px] font-mono text-neutral-500">
-                                <span>{group.items.length} producto{group.items.length !== 1 ? 's' : ''}</span>
-                                <span>{group.totalPallets} pallets</span>
-                                <span>{group.totalCantidad} und</span>
-                                <span>{group.totalKilos.toFixed(1)} kg</span>
+                                <span>{group.totalPdfCajas} cajas</span>
+                                <span>{group.totalPdfKilos.toFixed(2)} kg (PDF)</span>
+                                <span>{group.totalInvKilos.toFixed(2)} kg (Inv)</span>
                               </div>
                             </div>
                           </div>
@@ -568,34 +639,40 @@ export default function PdfProcessor({ inventoryData = [] }: PdfProcessorProps) 
                           </div>
                         </button>
 
-                        {/* Expanded Items */}
+                        {/* Expanded Detail */}
                         {isExpanded && (
                           <div className="border-t border-neutral-200">
                             <table className="w-full text-left text-xs font-sans">
                               <thead className="bg-neutral-100/50 text-[10px] font-mono uppercase tracking-widest text-neutral-500">
                                 <tr>
+                                  <th className="p-3">Pallet</th>
                                   <th className="p-3">Producto</th>
-                                  <th className="p-3 text-right">Pallets</th>
-                                  <th className="p-3 text-right">Cantidad</th>
-                                  <th className="p-3 text-right">Kilos</th>
+                                  <th className="p-3 text-right">Cajas</th>
+                                  <th className="p-3 text-right">Kilos (PDF)</th>
+                                  <th className="p-3 text-right">Kilos (Inv)</th>
                                 </tr>
                               </thead>
                               <tbody className="divide-y divide-neutral-100">
-                                {group.items.map((item, idx) => (
-                                  <tr key={item.id || idx} className="hover:bg-yellow-50 transition-colors">
-                                    <td className="p-3">{item.producto}</td>
-                                    <td className="p-3 text-right font-mono">{item.pallets}</td>
-                                    <td className="p-3 text-right font-mono">{item.cantidad}</td>
-                                    <td className="p-3 text-right font-mono">{item.kilos} KG</td>
-                                  </tr>
+                                {group.items.map(({ inventoryItem, pdfPallets }, idx) => (
+                                  pdfPallets.map((pallet, pIdx) => (
+                                    <tr key={`${idx}-${pIdx}`} className="hover:bg-yellow-50 transition-colors">
+                                      <td className="p-3 font-mono font-medium text-blue-700">{pallet.palletNumber}</td>
+                                      <td className="p-3">{inventoryItem.producto}</td>
+                                      <td className="p-3 text-right font-mono">{pallet.cajas}</td>
+                                      <td className="p-3 text-right font-mono">{pallet.kilos.toFixed(2)}</td>
+                                      <td className="p-3 text-right font-mono text-neutral-500">{inventoryItem.kilos}</td>
+                                    </tr>
+                                  ))
                                 ))}
                               </tbody>
                               <tfoot>
                                 <tr className="bg-neutral-50 border-t-2 border-neutral-300">
-                                  <td className="p-3 font-mono uppercase tracking-widest text-[10px] text-neutral-600 font-medium">Subtotal</td>
-                                  <td className="p-3 text-right font-mono font-medium">{group.totalPallets}</td>
-                                  <td className="p-3 text-right font-mono font-medium">{group.totalCantidad}</td>
-                                  <td className="p-3 text-right font-mono font-medium">{group.totalKilos.toFixed(1)} KG</td>
+                                  <td className="p-3 font-mono uppercase tracking-widest text-[10px] text-neutral-600 font-medium" colSpan={2}>
+                                    Subtotal ({group.items.length} pallets)
+                                  </td>
+                                  <td className="p-3 text-right font-mono font-medium">{group.totalPdfCajas}</td>
+                                  <td className="p-3 text-right font-mono font-medium">{group.totalPdfKilos.toFixed(2)}</td>
+                                  <td className="p-3 text-right font-mono font-medium text-neutral-500">{group.totalInvKilos.toFixed(2)}</td>
                                 </tr>
                               </tfoot>
                             </table>
@@ -608,13 +685,13 @@ export default function PdfProcessor({ inventoryData = [] }: PdfProcessorProps) 
               </div>
             )}
 
-            {results.foundItems.length === 0 && results.missingIds.length > 0 && (
+            {results.foundItems.length === 0 && results.missingPallets.length > 0 && (
               <div className="border border-neutral-200 bg-neutral-50 p-8 text-center">
                 <p className="text-sm font-mono uppercase tracking-widest text-neutral-500">
-                  No se encontraron ítems para los IDs buscados.
+                  Ningún pallet encontrado en el inventario.
                 </p>
                 <p className="text-xs font-mono text-neutral-400 mt-2">
-                  Verifica que los números de lote/pallet sean correctos. Recuerda que años como &quot;2025&quot; se excluyen automáticamente.
+                  Verifica que los números de pallet coincidan con el campo &quot;No. Cliente&quot; del inventario.
                 </p>
               </div>
             )}
