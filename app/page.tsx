@@ -24,6 +24,7 @@ export default function LogisticsDashboard() {
   const [inventoryData, setInventoryData] = useState<any[]>([]);
   const [isUploading, setIsUploading] = useState(false);
   const [isResetModalOpen, setIsResetModalOpen] = useState(false);
+  const [expandedContainers, setExpandedContainers] = useState<Set<string>>(new Set());
   const [isResetting, setIsResetting] = useState(false);
   const [toastMessage, setToastMessage] = useState<{text: string, type: 'success' | 'error'} | null>(null);
   const [currentDate, setCurrentDate] = useState<string>('');
@@ -52,6 +53,9 @@ export default function LogisticsDashboard() {
   useEffect(() => {
     setCurrentDate(new Date().toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit', year: 'numeric' }));
   }, []);
+
+  // Clean dots from numeroCliente
+  const cleanNum = (num: string) => String(num || '').replace(/\./g, '');
 
   // Real-time inventory listener
   useEffect(() => {
@@ -222,7 +226,7 @@ export default function LogisticsDashboard() {
             };
             mappedData.push({
               cliente: currentClienteName,
-              numeroCliente: currentClienteNum,
+              numeroCliente: String(currentClienteNum).replace(/\./g, ''),
               producto: String(producto).trim(),
               pallets: parseNumber(row[colPallets]),
               cantidad: parseNumber(row[colCajas]),
@@ -289,15 +293,56 @@ export default function LogisticsDashboard() {
     ).slice(0, 50);
   }, [searchTerm, activityRecords]);
 
-  const filteredInventory = useMemo(() => {
-    if (!searchTerm.trim()) return inventoryData;
+  // Group inventory by container (cliente)
+  const groupedInventory = useMemo(() => {
     const term = searchTerm.toLowerCase();
-    return inventoryData.filter(item =>
-      (item.numeroCliente || '').toLowerCase().includes(term) ||
-      (item.cliente || '').toLowerCase().includes(term) ||
-      (item.producto || '').toLowerCase().includes(term)
-    );
+    const source = inventoryData.map(item => ({ ...item, numeroCliente: cleanNum(item.numeroCliente) }));
+    const filtered = term
+      ? source.filter(item =>
+          item.numeroCliente.toLowerCase().includes(term) ||
+          (item.cliente || '').toLowerCase().includes(term) ||
+          (item.producto || '').toLowerCase().includes(term)
+        )
+      : source;
+
+    const groupMap = new Map<string, { cliente: string; items: any[]; totalPallets: number; totalCajas: number; totalKilos: number }>();
+    filtered.forEach(item => {
+      const key = String(item.cliente || 'SIN CLIENTE');
+      if (groupMap.has(key)) {
+        const g = groupMap.get(key)!;
+        g.items.push(item);
+        g.totalPallets += Number(item.pallets) || 0;
+        g.totalCajas += Number(item.cantidad) || 0;
+        g.totalKilos += Number(item.kilos) || 0;
+      } else {
+        groupMap.set(key, {
+          cliente: key,
+          items: [item],
+          totalPallets: Number(item.pallets) || 0,
+          totalCajas: Number(item.cantidad) || 0,
+          totalKilos: Number(item.kilos) || 0,
+        });
+      }
+    });
+    return Array.from(groupMap.values());
   }, [searchTerm, inventoryData]);
+
+  const toggleContainer = (key: string) => {
+    setExpandedContainers(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      return next;
+    });
+  };
+
+  // Auto-expand all containers when inventory changes
+  useEffect(() => {
+    if (inventoryData.length > 0) {
+      const keys = new Set<string>();
+      inventoryData.forEach(item => keys.add(String(item.cliente || 'SIN CLIENTE')));
+      setExpandedContainers(keys);
+    }
+  }, [inventoryData]);
 
   return (
     <div className="h-screen overflow-hidden bg-neutral-100 flex text-neutral-900 font-sans selection:bg-neutral-900 selection:text-white relative">
@@ -483,7 +528,7 @@ export default function LogisticsDashboard() {
               <div>
                 <h2 className="text-2xl font-light tracking-tight text-neutral-900 uppercase">Control de Inventario</h2>
                 <p className="text-xs font-mono text-neutral-500 mt-2 uppercase tracking-widest">
-                  Total Registros: {filteredInventory.length}{searchTerm ? ` (filtrado de ${inventoryData.length})` : ''}
+                  {groupedInventory.length} contenedor{groupedInventory.length !== 1 ? 'es' : ''} · {inventoryData.length} ítems totales{searchTerm ? ' (filtrado)' : ''}
                 </p>
               </div>
               <div>
@@ -506,34 +551,79 @@ export default function LogisticsDashboard() {
                   Cargar archivo .xlsx para comenzar
                 </label>
               </div>
-            ) : filteredInventory.length === 0 ? (
+            ) : groupedInventory.length === 0 ? (
               <div className="flex-1 flex flex-col items-center justify-center border border-neutral-200 bg-white p-12 text-center">
                 <p className="text-sm font-mono uppercase tracking-widest text-neutral-400 mb-2">Sin resultados</p>
                 <p className="text-xs font-mono text-neutral-400">No se encontraron ítems que coincidan con &quot;{searchTerm}&quot;</p>
               </div>
             ) : (
-              <div className="border border-neutral-200 bg-white flex-1 overflow-hidden flex flex-col">
-                <div className="grid grid-cols-6 border-b border-neutral-200 bg-neutral-50 p-4 text-[10px] font-mono uppercase tracking-widest text-neutral-500">
-                  <div className="col-span-1">No. Cliente</div>
-                  <div className="col-span-1">Cliente</div>
-                  <div className="col-span-2">Producto</div>
-                  <div className="col-span-1 text-right">Pallets</div>
-                  <div className="col-span-1 text-right">Cantidad / Kilos</div>
-                </div>
-                <div className="divide-y divide-neutral-100 overflow-auto flex-1">
-                  {filteredInventory.map((item, i) => (
-                    <div key={i} className="grid grid-cols-6 p-4 text-xs font-mono uppercase tracking-wider text-neutral-900 hover:bg-neutral-50 transition-colors">
-                      <div className="col-span-1 text-neutral-500">{item.numeroCliente}</div>
-                      <div className="col-span-1 font-medium truncate pr-4" title={item.cliente}>{item.cliente}</div>
-                      <div className="col-span-2 truncate pr-4" title={item.producto}>{item.producto}</div>
-                      <div className="col-span-1 text-right">{item.pallets}</div>
-                      <div className="col-span-1 text-right">
-                        <div>{item.cantidad} UND</div>
-                        <div className="text-[10px] text-neutral-500 mt-1">{item.kilos} KG</div>
-                      </div>
+              <div className="flex-1 overflow-auto flex flex-col gap-3">
+                {groupedInventory.map((group, groupIdx) => {
+                  const isExpanded = expandedContainers.has(group.cliente);
+                  return (
+                    <div key={group.cliente} className="border border-neutral-200 bg-white overflow-hidden">
+                      <button
+                        onClick={() => toggleContainer(group.cliente)}
+                        className="w-full flex items-center justify-between p-4 bg-neutral-50 hover:bg-neutral-100 transition-colors text-left"
+                      >
+                        <div className="flex items-center gap-4">
+                          <span className={`text-neutral-400 transition-transform ${isExpanded ? 'rotate-90' : ''}`}>&#9654;</span>
+                          <div>
+                            <div className="flex items-center gap-3">
+                              <span className="text-xs font-mono uppercase tracking-widest text-neutral-900 font-medium">{group.cliente}</span>
+                              <span className="px-2 py-0.5 bg-blue-100 text-blue-800 text-[10px] font-mono uppercase tracking-widest">
+                                {group.items.length} producto{group.items.length !== 1 ? 's' : ''}
+                              </span>
+                            </div>
+                            <div className="flex items-center gap-4 mt-1 text-[10px] font-mono text-neutral-500">
+                              <span>{group.totalPallets} pallets</span>
+                              <span>{group.totalCajas} cajas</span>
+                              <span>{group.totalKilos.toFixed(1)} kg</span>
+                            </div>
+                          </div>
+                        </div>
+                        <div className="text-[10px] font-mono text-neutral-400 uppercase tracking-widest">#{groupIdx + 1}</div>
+                      </button>
+
+                      {isExpanded && (
+                        <div className="border-t border-neutral-200">
+                          <table className="w-full text-left text-xs font-sans">
+                            <thead className="bg-neutral-100/50 text-[10px] font-mono uppercase tracking-widest text-neutral-500">
+                              <tr>
+                                <th className="p-3">Lote</th>
+                                <th className="p-3">Descripción</th>
+                                <th className="p-3 text-right">Pallets</th>
+                                <th className="p-3 text-right">Cajas</th>
+                                <th className="p-3 text-right">Kilos</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-neutral-100">
+                              {group.items.map((item, idx) => (
+                                <tr key={item.id || idx} className="hover:bg-yellow-50 transition-colors">
+                                  <td className="p-3 font-mono font-medium text-blue-700 whitespace-nowrap">{cleanNum(item.numeroCliente)}</td>
+                                  <td className="p-3 max-w-xs truncate" title={item.producto}>{item.producto}</td>
+                                  <td className="p-3 text-right font-mono">{item.pallets}</td>
+                                  <td className="p-3 text-right font-mono">{item.cantidad}</td>
+                                  <td className="p-3 text-right font-mono">{item.kilos}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                            <tfoot>
+                              <tr className="bg-neutral-50 border-t-2 border-neutral-300">
+                                <td className="p-3 font-mono uppercase tracking-widest text-[10px] text-neutral-600 font-medium" colSpan={2}>
+                                  Subtotal
+                                </td>
+                                <td className="p-3 text-right font-mono font-medium">{group.totalPallets}</td>
+                                <td className="p-3 text-right font-mono font-medium">{group.totalCajas}</td>
+                                <td className="p-3 text-right font-mono font-medium">{group.totalKilos.toFixed(1)}</td>
+                              </tr>
+                            </tfoot>
+                          </table>
+                        </div>
+                      )}
                     </div>
-                  ))}
-                </div>
+                  );
+                })}
               </div>
             )}
           </div>
