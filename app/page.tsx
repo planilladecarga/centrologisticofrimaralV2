@@ -187,7 +187,7 @@ export default function LogisticsDashboard() {
       const mappedData: any[] = [];
       let currentClienteNum = '-';
       let currentClienteName = '-';
-      let colPallets = -1, colCajas = -1, colKilos = -1, colContenido = -1;
+      let colPallets = -1, colCajas = -1, colKilos = -1, colContenido = -1, colContenedor = -1, colLote = -1;
 
       for (let i = 0; i < rawData.length; i++) {
         const row = rawData[i];
@@ -210,6 +210,8 @@ export default function LogisticsDashboard() {
           colCajas = row.findIndex(c => String(c || '').toLowerCase().includes('caja') || String(c || '').toLowerCase().includes('cantidad'));
           colKilos = row.findIndex(c => String(c || '').toLowerCase().includes('kilo') || String(c || '').toLowerCase().includes('peso'));
           colContenido = row.findIndex(c => String(c || '').toLowerCase().includes('contenido') || String(c || '').toLowerCase().includes('descrip') || String(c || '').toLowerCase().includes('producto') || String(c || '').toLowerCase().includes('articulo'));
+          colContenedor = row.findIndex(c => String(c || '').toLowerCase().includes('contenedor'));
+          colLote = row.findIndex(c => String(c || '').toLowerCase().includes('lote'));
           continue;
         }
 
@@ -224,10 +226,14 @@ export default function LogisticsDashboard() {
               const num = parseFloat(strVal);
               return isNaN(num) ? 0 : num;
             };
+            const contenedorVal = colContenedor !== -1 ? String(row[colContenedor] || '').trim() : '';
+            const loteVal = colLote !== -1 ? String(row[colLote] || '').trim() : '';
             mappedData.push({
               cliente: currentClienteName,
               numeroCliente: String(currentClienteNum).replace(/\./g, ''),
               producto: String(producto).trim(),
+              contenedor: contenedorVal,
+              lote: loteVal,
               pallets: parseNumber(row[colPallets]),
               cantidad: parseNumber(row[colCajas]),
               kilos: parseNumber(row[colKilos])
@@ -302,15 +308,15 @@ export default function LogisticsDashboard() {
           cleanNum(item.numeroCliente).toLowerCase().includes(term) ||
           (item.cliente || '').toLowerCase().includes(term) ||
           (item.producto || '').toLowerCase().includes(term) ||
-          (item.contenedor || '').toLowerCase().includes(term)
+          (item.contenedor || '').toLowerCase().includes(term) ||
+          (item.lote || '').toLowerCase().includes(term)
         )
       : source;
 
-    // Aggregate pallets where cliente + lote + descripcion + kilos are identical
+    // Aggregate: merge identical lines (mismo contenedor + lote + producto + kilos)
     const aggMap = new Map<string, any>();
     filtered.forEach(item => {
-      const cleanLote = cleanNum(item.numeroCliente);
-      const aggKey = `${item.cliente}|${cleanLote}|${item.producto}|${item.kilos}`;
+      const aggKey = `${item.contenedor || ''}|${item.lote || ''}|${item.producto}|${item.kilos}`;
       if (aggMap.has(aggKey)) {
         const agg = aggMap.get(aggKey)!;
         agg.pallets += Number(item.pallets) || 0;
@@ -318,9 +324,10 @@ export default function LogisticsDashboard() {
       } else {
         aggMap.set(aggKey, {
           cliente: item.cliente,
-          numeroCliente: cleanLote,
+          numeroCliente: cleanNum(item.numeroCliente),
           producto: item.producto,
           contenedor: item.contenedor || '',
+          lote: item.lote || '',
           pallets: Number(item.pallets) || 0,
           cantidad: Number(item.cantidad) || 0,
           kilos: Number(item.kilos) || 0,
@@ -610,37 +617,39 @@ export default function LogisticsDashboard() {
                             <table className="w-full text-left text-xs font-sans">
                               <thead className="bg-neutral-100/50 text-[10px] font-mono uppercase tracking-widest text-neutral-500">
                                 <tr>
-                                  <th className="p-3">Cliente</th>
-                                  <th className="p-3">Lote</th>
-                                  <th className="p-3 text-right">Cajas</th>
+                                  <th className="p-3 text-center">Pallets</th>
+                                  <th className="p-3">Nro Lote</th>
                                   <th className="p-3">Descripción</th>
+                                  <th className="p-3 text-right">Cajas</th>
                                   <th className="p-3 text-right">Kilos</th>
-                                  <th className="p-3 text-right">Cant. Pallets</th>
+                                  <th className="p-3">Cliente</th>
                                 </tr>
                               </thead>
                               <tbody className="divide-y divide-neutral-100">
                                 {group.items.map((item, idx) => (
-                                  <tr key={item.id || idx} className="hover:bg-yellow-50 transition-colors">
-                                    <td className="p-3 font-mono font-medium text-neutral-900 whitespace-nowrap">{item.cliente}</td>
-                                    <td className="p-3 font-mono font-medium text-blue-700 whitespace-nowrap">{cleanNum(item.numeroCliente)}</td>
-                                    <td className="p-3 text-right font-mono">{item.cantidad}</td>
-                                    <td className="p-3 max-w-xs truncate" title={item.producto}>{item.producto}</td>
-                                    <td className="p-3 text-right font-mono">{item.kilos}</td>
-                                    <td className="p-3 text-right font-mono">
-                                      <span className={`px-2 py-0.5 font-medium ${item.pallets > 1 ? 'bg-green-100 text-green-800' : 'text-neutral-700'}`}>{item.pallets}</span>
+                                  <tr key={item.id || idx} className="hover:bg-blue-50 transition-colors">
+                                    <td className="p-3 text-center font-mono font-bold">
+                                      <span className={`inline-block px-2 py-0.5 rounded text-sm ${item.pallets > 1 ? 'bg-blue-100 text-blue-800' : 'bg-neutral-100 text-neutral-700'}`}>
+                                        {item.pallets}
+                                      </span>
                                     </td>
+                                    <td className="p-3 font-mono font-medium text-blue-700 whitespace-nowrap">{item.lote || '-'}</td>
+                                    <td className="p-3 max-w-sm" title={item.producto}>
+                                      <span className="line-clamp-2 text-xs leading-snug">{item.producto}</span>
+                                    </td>
+                                    <td className="p-3 text-right font-mono text-neutral-700">{item.cantidad}</td>
+                                    <td className="p-3 text-right font-mono font-medium text-neutral-900">{Number(item.kilos).toFixed(1)}</td>
+                                    <td className="p-3 font-mono text-neutral-500 text-[10px] whitespace-nowrap">{item.cliente}</td>
                                   </tr>
                                 ))}
                               </tbody>
                               <tfoot>
-                                <tr className="bg-neutral-50 border-t-2 border-neutral-300">
-                                  <td className="p-3 font-mono uppercase tracking-widest text-[10px] text-neutral-600 font-medium" colSpan={2}>
-                                    Subtotal
-                                  </td>
-                                  <td className="p-3 text-right font-mono font-medium">{group.totalCajas}</td>
+                                <tr className="bg-neutral-50 border-t-2 border-neutral-300 font-medium">
+                                  <td className="p-3 text-center font-mono font-bold text-neutral-700">{group.totalPallets}</td>
+                                  <td className="p-3 font-mono uppercase tracking-widest text-[10px] text-neutral-500" colSpan={2}>Totales del Contenedor</td>
+                                  <td className="p-3 text-right font-mono">{group.totalCajas}</td>
+                                  <td className="p-3 text-right font-mono">{group.totalKilos.toFixed(1)}</td>
                                   <td className="p-3"></td>
-                                  <td className="p-3 text-right font-mono font-medium">{group.totalKilos.toFixed(1)}</td>
-                                  <td className="p-3 text-right font-mono font-medium">{group.totalPallets}</td>
                                 </tr>
                               </tfoot>
                             </table>
