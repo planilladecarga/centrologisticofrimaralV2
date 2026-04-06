@@ -575,11 +575,11 @@ export default function LogisticsDashboard() {
                 <p className="text-xs font-mono text-neutral-400">No se encontraron ítems que coincidan con &quot;{searchTerm}&quot;</p>
               </div>
             ) : (
-              <div className="flex-1 overflow-auto flex flex-col gap-2">
+              <div className="flex flex-col gap-2 pb-4">
                 {groupedInventory.map((group, groupIdx) => {
                   const isExpanded = expandedContainers.has(group.contenedor);
                   return (
-                    <div key={group.contenedor} className="border border-neutral-200 bg-white overflow-hidden">
+                    <div key={group.contenedor || groupIdx} className="border border-neutral-200 bg-white overflow-hidden">
                       <button
                         onClick={() => toggleContainer(group.contenedor)}
                         className="w-full flex items-center justify-between p-4 hover:bg-neutral-50 transition-colors text-left"
