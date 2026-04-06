@@ -32,9 +32,16 @@ export default function InventoryView({ groupedInventory, inventoryData, searchT
           >✕ Limpiar</button>
         )}
       </div>
-      {/* Organización por Contenedor y Vista Expandible mejoradas visualmente */}
       <div className="flex-1 flex flex-col gap-4">
         {groupedInventory.map((group, groupIdx) => {
           const isExpanded = expandedContainers.has(group.contenedor);
           return (
             <div key={group.contenedor} className="border border-neutral-300 bg-gradient-to-br from-white to-neutral-50 overflow-hidden rounded-2xl shadow-lg hover:shadow-2xl transition-all duration-300">
+              {/* Aquí iría tu lógica para mostrar cada grupo/contenedor */}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
