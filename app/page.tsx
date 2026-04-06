@@ -293,38 +293,58 @@ export default function LogisticsDashboard() {
     ).slice(0, 50);
   }, [searchTerm, activityRecords]);
 
-  // Group inventory by container (cliente)
+  // Group inventory by contenedor, aggregate pallets with same description/lote/kilos
   const groupedInventory = useMemo(() => {
     const term = searchTerm.toLowerCase();
     const source = inventoryData.map(item => ({ ...item, numeroCliente: cleanNum(item.numeroCliente) }));
     const filtered = term
       ? source.filter(item =>
-          item.numeroCliente.toLowerCase().includes(term) ||
+          cleanNum(item.numeroCliente).toLowerCase().includes(term) ||
           (item.cliente || '').toLowerCase().includes(term) ||
-          (item.producto || '').toLowerCase().includes(term)
+          (item.producto || '').toLowerCase().includes(term) ||
+          (item.contenedor || '').toLowerCase().includes(term)
         )
       : source;
 
-    const groupMap = new Map<string, { cliente: string; items: any[]; totalPallets: number; totalCajas: number; totalKilos: number }>();
+    // Aggregate pallets where cliente + lote + descripcion + kilos are identical
+    const aggMap = new Map<string, any>();
     filtered.forEach(item => {
-      const key = String(item.cliente || 'SIN CLIENTE');
-      if (groupMap.has(key)) {
-        const g = groupMap.get(key)!;
-        g.items.push(item);
-        g.totalPallets += Number(item.pallets) || 0;
-        g.totalCajas += Number(item.cantidad) || 0;
-        g.totalKilos += Number(item.kilos) || 0;
+      const cleanLote = cleanNum(item.numeroCliente);
+      const aggKey = `${item.cliente}|${cleanLote}|${item.producto}|${item.kilos}`;
+      if (aggMap.has(aggKey)) {
+        const agg = aggMap.get(aggKey)!;
+        agg.pallets += Number(item.pallets) || 0;
+        agg.cantidad += Number(item.cantidad) || 0;
       } else {
-        groupMap.set(key, {
-          cliente: key,
-          items: [item],
-          totalPallets: Number(item.pallets) || 0,
-          totalCajas: Number(item.cantidad) || 0,
-          totalKilos: Number(item.kilos) || 0,
+        aggMap.set(aggKey, {
+          cliente: item.cliente,
+          numeroCliente: cleanLote,
+          producto: item.producto,
+          contenedor: item.contenedor || '',
+          pallets: Number(item.pallets) || 0,
+          cantidad: Number(item.cantidad) || 0,
+          kilos: Number(item.kilos) || 0,
+          id: item.id,
         });
       }
     });
-    return Array.from(groupMap.values());
+    const aggregatedItems = Array.from(aggMap.values());
+
+    // Group aggregated items by contenedor
+    const containerMap = new Map<string, any[]>();
+    aggregatedItems.forEach(item => {
+      const key = String(item.contenedor || 'SIN CONTENEDOR').trim();
+      if (!containerMap.has(key)) containerMap.set(key, []);
+      containerMap.get(key)!.push(item);
+    });
+
+    return Array.from(containerMap.entries()).map(([contenedor, items]) => {
+      const clientes = [...new Set(items.map(i => i.cliente).filter(Boolean))];
+      const totalPallets = items.reduce((s, i) => s + i.pallets, 0);
+      const totalCajas = items.reduce((s, i) => s + i.cantidad, 0);
+      const totalKilos = items.reduce((s, i) => s + i.kilos, 0);
+      return { contenedor, clientes, items, totalPallets, totalCajas, totalKilos };
+    });
   }, [searchTerm, inventoryData]);
 
   const toggleContainer = (key: string) => {
@@ -334,15 +354,6 @@ export default function LogisticsDashboard() {
       return next;
     });
   };
-
-  // Auto-expand all containers when inventory changes
-  useEffect(() => {
-    if (inventoryData.length > 0) {
-      const keys = new Set<string>();
-      inventoryData.forEach(item => keys.add(String(item.cliente || 'SIN CLIENTE')));
-      setExpandedContainers(keys);
-    }
-  }, [inventoryData]);
 
   return (
     <div className="h-screen overflow-hidden bg-neutral-100 flex text-neutral-900 font-sans selection:bg-neutral-900 selection:text-white relative">
@@ -557,68 +568,83 @@ export default function LogisticsDashboard() {
                 <p className="text-xs font-mono text-neutral-400">No se encontraron ítems que coincidan con &quot;{searchTerm}&quot;</p>
               </div>
             ) : (
-              <div className="flex-1 overflow-auto flex flex-col gap-3">
+              <div className="flex-1 overflow-auto flex flex-col gap-2">
                 {groupedInventory.map((group, groupIdx) => {
-                  const isExpanded = expandedContainers.has(group.cliente);
+                  const isExpanded = expandedContainers.has(group.contenedor);
                   return (
-                    <div key={group.cliente} className="border border-neutral-200 bg-white overflow-hidden">
+                    <div key={group.contenedor} className="border border-neutral-200 bg-white overflow-hidden">
                       <button
-                        onClick={() => toggleContainer(group.cliente)}
-                        className="w-full flex items-center justify-between p-4 bg-neutral-50 hover:bg-neutral-100 transition-colors text-left"
+                        onClick={() => toggleContainer(group.contenedor)}
+                        className="w-full flex items-center justify-between p-4 hover:bg-neutral-50 transition-colors text-left"
                       >
-                        <div className="flex items-center gap-4">
-                          <span className={`text-neutral-400 transition-transform ${isExpanded ? 'rotate-90' : ''}`}>&#9654;</span>
-                          <div>
-                            <div className="flex items-center gap-3">
-                              <span className="text-xs font-mono uppercase tracking-widest text-neutral-900 font-medium">{group.cliente}</span>
-                              <span className="px-2 py-0.5 bg-blue-100 text-blue-800 text-[10px] font-mono uppercase tracking-widest">
-                                {group.items.length} producto{group.items.length !== 1 ? 's' : ''}
+                        <div className="flex items-center gap-4 flex-1 min-w-0">
+                          <span className={`text-neutral-400 transition-transform shrink-0 ${isExpanded ? 'rotate-90' : ''}`}>&#9654;</span>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-3 flex-wrap">
+                              <span className="text-sm font-mono uppercase tracking-widest text-neutral-900 font-bold whitespace-nowrap">
+                                {group.contenedor}
+                              </span>
+                              <span className="text-neutral-300">|</span>
+                              <span className="text-xs font-mono uppercase tracking-widest text-neutral-600 truncate">
+                                {group.clientes.join(', ')}
                               </span>
                             </div>
-                            <div className="flex items-center gap-4 mt-1 text-[10px] font-mono text-neutral-500">
+                            <div className="flex items-center gap-4 mt-1.5 text-[10px] font-mono text-neutral-500">
+                              <span className="px-2 py-0.5 bg-blue-50 text-blue-700">
+                                {group.items.length} producto{group.items.length !== 1 ? 's' : ''}
+                              </span>
                               <span>{group.totalPallets} pallets</span>
                               <span>{group.totalCajas} cajas</span>
                               <span>{group.totalKilos.toFixed(1)} kg</span>
                             </div>
                           </div>
                         </div>
-                        <div className="text-[10px] font-mono text-neutral-400 uppercase tracking-widest">#{groupIdx + 1}</div>
+                        <div className="text-[10px] font-mono text-neutral-400 uppercase tracking-widest shrink-0 ml-4">
+                          #{groupIdx + 1}
+                        </div>
                       </button>
 
                       {isExpanded && (
                         <div className="border-t border-neutral-200">
-                          <table className="w-full text-left text-xs font-sans">
-                            <thead className="bg-neutral-100/50 text-[10px] font-mono uppercase tracking-widest text-neutral-500">
-                              <tr>
-                                <th className="p-3">Lote</th>
-                                <th className="p-3">Descripción</th>
-                                <th className="p-3 text-right">Pallets</th>
-                                <th className="p-3 text-right">Cajas</th>
-                                <th className="p-3 text-right">Kilos</th>
-                              </tr>
-                            </thead>
-                            <tbody className="divide-y divide-neutral-100">
-                              {group.items.map((item, idx) => (
-                                <tr key={item.id || idx} className="hover:bg-yellow-50 transition-colors">
-                                  <td className="p-3 font-mono font-medium text-blue-700 whitespace-nowrap">{cleanNum(item.numeroCliente)}</td>
-                                  <td className="p-3 max-w-xs truncate" title={item.producto}>{item.producto}</td>
-                                  <td className="p-3 text-right font-mono">{item.pallets}</td>
-                                  <td className="p-3 text-right font-mono">{item.cantidad}</td>
-                                  <td className="p-3 text-right font-mono">{item.kilos}</td>
+                          <div className="overflow-x-auto">
+                            <table className="w-full text-left text-xs font-sans">
+                              <thead className="bg-neutral-100/50 text-[10px] font-mono uppercase tracking-widest text-neutral-500">
+                                <tr>
+                                  <th className="p-3">Cliente</th>
+                                  <th className="p-3">Lote</th>
+                                  <th className="p-3 text-right">Cajas</th>
+                                  <th className="p-3">Descripción</th>
+                                  <th className="p-3 text-right">Kilos</th>
+                                  <th className="p-3 text-right">Cant. Pallets</th>
                                 </tr>
-                              ))}
-                            </tbody>
-                            <tfoot>
-                              <tr className="bg-neutral-50 border-t-2 border-neutral-300">
-                                <td className="p-3 font-mono uppercase tracking-widest text-[10px] text-neutral-600 font-medium" colSpan={2}>
-                                  Subtotal
-                                </td>
-                                <td className="p-3 text-right font-mono font-medium">{group.totalPallets}</td>
-                                <td className="p-3 text-right font-mono font-medium">{group.totalCajas}</td>
-                                <td className="p-3 text-right font-mono font-medium">{group.totalKilos.toFixed(1)}</td>
-                              </tr>
-                            </tfoot>
-                          </table>
+                              </thead>
+                              <tbody className="divide-y divide-neutral-100">
+                                {group.items.map((item, idx) => (
+                                  <tr key={item.id || idx} className="hover:bg-yellow-50 transition-colors">
+                                    <td className="p-3 font-mono font-medium text-neutral-900 whitespace-nowrap">{item.cliente}</td>
+                                    <td className="p-3 font-mono font-medium text-blue-700 whitespace-nowrap">{cleanNum(item.numeroCliente)}</td>
+                                    <td className="p-3 text-right font-mono">{item.cantidad}</td>
+                                    <td className="p-3 max-w-xs truncate" title={item.producto}>{item.producto}</td>
+                                    <td className="p-3 text-right font-mono">{item.kilos}</td>
+                                    <td className="p-3 text-right font-mono">
+                                      <span className={`px-2 py-0.5 font-medium ${item.pallets > 1 ? 'bg-green-100 text-green-800' : 'text-neutral-700'}`}>{item.pallets}</span>
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                              <tfoot>
+                                <tr className="bg-neutral-50 border-t-2 border-neutral-300">
+                                  <td className="p-3 font-mono uppercase tracking-widest text-[10px] text-neutral-600 font-medium" colSpan={2}>
+                                    Subtotal
+                                  </td>
+                                  <td className="p-3 text-right font-mono font-medium">{group.totalCajas}</td>
+                                  <td className="p-3"></td>
+                                  <td className="p-3 text-right font-mono font-medium">{group.totalKilos.toFixed(1)}</td>
+                                  <td className="p-3 text-right font-mono font-medium">{group.totalPallets}</td>
+                                </tr>
+                              </tfoot>
+                            </table>
+                          </div>
                         </div>
                       )}
                     </div>
