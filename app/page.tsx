@@ -541,8 +541,8 @@ export default function LogisticsDashboard() {
 
         {/* ===== INVENTORY ===== */}
         {activeTab === 'inventory' && (
-          <div className="p-8 flex-1 overflow-auto flex flex-col">
-            <div className="flex justify-between items-end mb-8 border-b border-neutral-200 pb-6">
+          <div className="p-8 flex-1 overflow-auto flex flex-col bg-neutral-50">
+            <div className="flex justify-between items-end mb-6 pb-4">
               <div>
                 <h2 className="text-2xl font-light tracking-tight text-neutral-900 uppercase">Control de Inventario</h2>
                 <p className="text-xs font-mono text-neutral-500 mt-2 uppercase tracking-widest">
@@ -562,7 +562,7 @@ export default function LogisticsDashboard() {
             </div>
 
             {inventoryData.length === 0 ? (
-              <div className="flex-1 flex flex-col items-center justify-center border border-dashed border-neutral-300 bg-neutral-50 p-12 text-center">
+              <div className="flex-1 flex flex-col items-center justify-center border-2 border-dashed border-neutral-300 bg-white p-12 text-center">
                 <p className="text-sm font-mono uppercase tracking-widest text-neutral-500 mb-4">No hay datos en el inventario</p>
                 <label htmlFor="excel-upload"
                   className="text-xs font-mono uppercase tracking-widest text-neutral-900 underline underline-offset-4 cursor-pointer hover:text-neutral-600">
@@ -575,80 +575,93 @@ export default function LogisticsDashboard() {
                 <p className="text-xs font-mono text-neutral-400">No se encontraron ítems que coincidan con &quot;{searchTerm}&quot;</p>
               </div>
             ) : (
-              <div className="flex flex-col gap-2 pb-4">
-                {groupedInventory.map((group, groupIdx) => {
+              <div className="flex flex-col gap-3 pb-4">
+                {groupedInventory.sort((a, b) => a.contenedor.localeCompare(b.contenedor)).map((group, groupIdx) => {
                   const isExpanded = expandedContainers.has(group.contenedor);
                   return (
-                    <div key={group.contenedor || groupIdx} className="border border-neutral-200 bg-white overflow-hidden">
+                    <div key={group.contenedor || groupIdx} className="border border-neutral-300 bg-white overflow-hidden shadow-sm hover:shadow-md transition-shadow">
                       <button
                         onClick={() => toggleContainer(group.contenedor)}
-                        className="w-full flex items-center justify-between p-4 hover:bg-neutral-50 transition-colors text-left"
+                        className="w-full flex items-center justify-between p-5 hover:bg-neutral-50 transition-colors text-left"
                       >
                         <div className="flex items-center gap-4 flex-1 min-w-0">
-                          <span className={`text-neutral-400 transition-transform shrink-0 ${isExpanded ? 'rotate-90' : ''}`}>&#9654;</span>
+                          <div className={`w-6 h-6 flex items-center justify-center text-neutral-500 transition-transform shrink-0 ${isExpanded ? 'rotate-90' : ''}`}>
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                            </svg>
+                          </div>
                           <div className="flex-1 min-w-0">
-                            <div className="flex items-center gap-3 flex-wrap">
-                              <span className="text-sm font-mono uppercase tracking-widest text-neutral-900 font-bold whitespace-nowrap">
+                            <div className="flex items-center gap-3 flex-wrap mb-2">
+                              <span className="text-base font-mono uppercase tracking-wider text-neutral-900 font-bold whitespace-nowrap">
                                 {group.contenedor}
                               </span>
-                              <span className="text-neutral-300">|</span>
-                              <span className="text-xs font-mono uppercase tracking-widest text-neutral-600 truncate">
-                                {group.clientes.join(', ')}
+                              <span className="px-2 py-0.5 bg-neutral-900 text-white text-[10px] font-mono uppercase tracking-widest">
+                                {group.items.length} PROD
                               </span>
                             </div>
-                            <div className="flex items-center gap-4 mt-1.5 text-[10px] font-mono text-neutral-500">
-                              <span className="px-2 py-0.5 bg-blue-50 text-blue-700">
-                                {group.items.length} producto{group.items.length !== 1 ? 's' : ''}
-                              </span>
-                              <span>{group.totalPallets} pallets</span>
-                              <span>{group.totalCajas} cajas</span>
-                              <span>{group.totalKilos.toFixed(1)} kg</span>
+                            <div className="flex items-center gap-1 text-[11px] font-mono text-neutral-600 truncate">
+                              <span className="text-neutral-400">CLIENTE:</span>
+                              <span className="font-medium">{group.clientes.join(', ')}</span>
+                            </div>
+                            <div className="flex items-center gap-5 mt-2 text-[10px] font-mono text-neutral-500">
+                              <div className="flex items-center gap-1">
+                                <span className="font-bold text-neutral-700">{group.totalPallets}</span>
+                                <span>PALLETS</span>
+                              </div>
+                              <div className="flex items-center gap-1">
+                                <span className="font-bold text-neutral-700">{group.totalCajas}</span>
+                                <span>CAJAS</span>
+                              </div>
+                              <div className="flex items-center gap-1">
+                                <span className="font-bold text-neutral-700">{group.totalKilos.toFixed(1)}</span>
+                                <span>KG</span>
+                              </div>
                             </div>
                           </div>
                         </div>
-                        <div className="text-[10px] font-mono text-neutral-400 uppercase tracking-widest shrink-0 ml-4">
-                          #{groupIdx + 1}
+                        <div className="text-[10px] font-mono text-neutral-400 uppercase tracking-widest shrink-0 ml-4 bg-neutral-100 px-3 py-1">
+                          #{String(groupIdx + 1).padStart(2, '0')}
                         </div>
                       </button>
 
                       {isExpanded && (
-                        <div className="border-t border-neutral-200">
+                        <div className="border-t-2 border-neutral-200 bg-neutral-50">
                           <div className="overflow-x-auto">
                             <table className="w-full text-left text-xs font-sans">
-                              <thead className="bg-neutral-100/50 text-[10px] font-mono uppercase tracking-widest text-neutral-500">
+                              <thead className="bg-neutral-900 text-white text-[10px] font-mono uppercase tracking-widest">
                                 <tr>
                                   <th className="p-3 text-center">Pallets</th>
-                                  <th className="p-3">Nro Lote</th>
+                                  <th className="p-3">Lote</th>
                                   <th className="p-3">Descripción</th>
                                   <th className="p-3 text-right">Cajas</th>
                                   <th className="p-3 text-right">Kilos</th>
                                   <th className="p-3">Cliente</th>
                                 </tr>
                               </thead>
-                              <tbody className="divide-y divide-neutral-100">
+                              <tbody className="divide-y divide-neutral-200 bg-white">
                                 {group.items.map((item, idx) => (
-                                  <tr key={item.id || idx} className="hover:bg-blue-50 transition-colors">
-                                    <td className="p-3 text-center font-mono font-bold">
-                                      <span className={`inline-block px-2 py-0.5 rounded text-sm ${item.pallets > 1 ? 'bg-blue-100 text-blue-800' : 'bg-neutral-100 text-neutral-700'}`}>
+                                  <tr key={item.id || idx} className="hover:bg-neutral-50 transition-colors">
+                                    <td className="p-3 text-center">
+                                      <span className={`inline-block px-3 py-1 font-mono font-bold text-sm ${item.pallets > 1 ? 'bg-neutral-900 text-white' : 'bg-neutral-200 text-neutral-700'}`}>
                                         {item.pallets}
                                       </span>
                                     </td>
-                                    <td className="p-3 font-mono font-medium text-blue-700 whitespace-nowrap">{item.lote || '-'}</td>
+                                    <td className="p-3 font-mono font-medium text-neutral-700 whitespace-nowrap">{item.lote || '-'}</td>
                                     <td className="p-3 max-w-sm" title={item.producto}>
-                                      <span className="line-clamp-2 text-xs leading-snug">{item.producto}</span>
+                                      <span className="line-clamp-2 text-xs leading-snug text-neutral-800">{item.producto}</span>
                                     </td>
-                                    <td className="p-3 text-right font-mono text-neutral-700">{item.cantidad}</td>
-                                    <td className="p-3 text-right font-mono font-medium text-neutral-900">{Number(item.kilos).toFixed(1)}</td>
+                                    <td className="p-3 text-right font-mono text-neutral-700 font-medium">{item.cantidad}</td>
+                                    <td className="p-3 text-right font-mono font-bold text-neutral-900">{Number(item.kilos).toFixed(1)}</td>
                                     <td className="p-3 font-mono text-neutral-500 text-[10px] whitespace-nowrap">{item.cliente}</td>
                                   </tr>
                                 ))}
                               </tbody>
                               <tfoot>
-                                <tr className="bg-neutral-50 border-t-2 border-neutral-300 font-medium">
-                                  <td className="p-3 text-center font-mono font-bold text-neutral-700">{group.totalPallets}</td>
-                                  <td className="p-3 font-mono uppercase tracking-widest text-[10px] text-neutral-500" colSpan={2}>Totales del Contenedor</td>
-                                  <td className="p-3 text-right font-mono">{group.totalCajas}</td>
-                                  <td className="p-3 text-right font-mono">{group.totalKilos.toFixed(1)}</td>
+                                <tr className="bg-neutral-900 text-white border-t-2 border-neutral-300 font-bold">
+                                  <td className="p-3 text-center font-mono text-sm">{group.totalPallets}</td>
+                                  <td className="p-3 font-mono uppercase tracking-widest text-[10px]" colSpan={2}>TOTAL CONTENEDOR</td>
+                                  <td className="p-3 text-right font-mono text-sm">{group.totalCajas}</td>
+                                  <td className="p-3 text-right font-mono text-sm">{group.totalKilos.toFixed(1)}</td>
                                   <td className="p-3"></td>
                                 </tr>
                               </tfoot>
