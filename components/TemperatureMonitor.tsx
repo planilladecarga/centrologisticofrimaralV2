@@ -13,6 +13,7 @@ import {
 
 const REFRESH_MS = 3 * 60 * 1000;
 const REFRESH_SECONDS = REFRESH_MS / 1000;
+const DEFAULT_TEMPERATURE_ENDPOINT = 'http://192.168.150.31/TemperaturaWeb/temperatura.php';
 
 interface TempData {
   actual: number;
@@ -26,14 +27,94 @@ interface TempData {
 
 type ApiStatus = 'ok' | 'offline' | 'timeout' | 'empty' | 'error';
 
-interface ApiResponse {
-  status: ApiStatus;
-  message: string;
-  data: TempData | null;
-  meta: {
-    attempts: number;
-    durationMs: number;
-    timestamp: string;
+function classifyError(error: unknown): ApiStatus {
+  if (error instanceof Error) {
+    if (error.name === 'TimeoutError' || error.name === 'AbortError') {
+      return 'timeout';
+    }
+
+    if (error.message.toLowerCase().includes('fetch failed')) {
+      return 'offline';
+    }
+  }
+
+  return 'error';
+}
+
+function parseTemperatureHtml(html: string): TempData | null {
+  const text = html.replace(/<[^>]*>/g, ' ');
+  const temps: number[] = [];
+  const re = /(-?\d+[\.,]\d{2})\s*°?\s*C/gi;
+  let match: RegExpExecArray | null = re.exec(text);
+
+  while (match !== null) {
+    temps.push(parseFloat(match[1].replace(',', '.')));
+    match = re.exec(text);
+  }
+
+  if (temps.length === 0) {
+    return null;
+  }
+
+  const findNear = (keyword: string) => {
+    const idx = text.toLowerCase().indexOf(keyword);
+
+    if (idx === -1) {
+      return temps[0];
+    }
+
+    const after = text.substring(idx);
+    const tempMatch = after.match(/(-?\d+[\.,]\d{2})\s*°?\s*C/i);
+    return tempMatch ? parseFloat(tempMatch[1].replace(',', '.')) : temps[0];
+  };
+
+  const actual = findNear('actual');
+  const promedio = findNear('promed') || findNear('prom');
+  const min = Math.min(...temps);
+  const max = Math.max(...temps);
+
+  const sensorMatch = text.match(/sensor\s*\d+/i);
+  const sensor = sensorMatch ? sensorMatch[0].toUpperCase() : 'SENSOR1';
+
+  const fechaMatch = text.match(/(\d{1,2})\s*[\/\-]\s*(\d{1,2})\s*[\/\-]\s*(\d{2,4})/);
+  const fecha = fechaMatch
+    ? `${fechaMatch[1].padStart(2, '0')}/${fechaMatch[2].padStart(2, '0')}/${fechaMatch[3].padStart(4, '0')}`
+    : new Date().toLocaleDateString('es-ES');
+
+  const historial: { hora: string; valor: number }[] = [];
+  const arrMatch = html.match(/\[(?:-?\d+[\.,]\d+(?:,\s*)?)+\]/g);
+
+  if (arrMatch) {
+    let longest = '';
+
+    for (const candidate of arrMatch) {
+      if (candidate.length > longest.length) {
+        longest = candidate;
+      }
+    }
+
+    const values = longest.match(/-?\d+[\.,]\d+/g);
+
+    if (values && values.length > 2) {
+      const interval = (24 * 60) / values.length;
+      values.forEach((value, index) => {
+        const mins = Math.floor(index * interval);
+        historial.push({
+          hora: `${String(Math.floor(mins / 60) % 24).padStart(2, '0')}:${String(mins % 60).padStart(2, '0')}`,
+          valor: parseFloat(value.replace(',', '.')),
+        });
+      });
+    }
+  }
+
+  return {
+    actual,
+    min,
+    max,
+    promedio: promedio || temps.reduce((acc, value) => acc + value, 0) / temps.length,
+    sensor,
+    fecha,
+    historial,
   };
 }
 
@@ -49,23 +130,40 @@ export default function TemperatureMonitor() {
     setError('');
 
     try {
-      const response = await fetch('/api/temperature', {
+      const endpoint = process.env.NEXT_PUBLIC_TEMPERATURE_ENDPOINT ?? DEFAULT_TEMPERATURE_ENDPOINT;
+      const response = await fetch(endpoint, {
         cache: 'no-store',
+        signal: AbortSignal.timeout(8_000),
       });
 
-      const payload: ApiResponse = await response.json();
-      setStatus(payload.status);
-
-      if (!response.ok || payload.status !== 'ok' || !payload.data) {
+      if (!response.ok) {
+        setStatus('offline');
         setData(null);
-        setError(payload.message || 'No se pudo obtener datos del servidor de temperaturas.');
+        setError('El origen interno no respondió correctamente.');
         return;
       }
 
-      setData(payload.data);
+      const html = await response.text();
+      if (!html.trim()) {
+        setStatus('empty');
+        setData(null);
+        setError('El origen interno respondió sin contenido.');
+        return;
+      }
+
+      const parsed = parseTemperatureHtml(html);
+      if (!parsed) {
+        setStatus('empty');
+        setData(null);
+        setError('No se encontraron datos de temperatura en la respuesta del origen.');
+        return;
+      }
+
+      setStatus('ok');
+      setData(parsed);
     } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : 'Error desconocido al consultar la API.';
-      setStatus('error');
+      const message = err instanceof Error ? err.message : 'Error desconocido al consultar el origen de temperaturas.';
+      setStatus(classifyError(err));
       setError(message);
       setData(null);
     } finally {
@@ -130,7 +228,7 @@ export default function TemperatureMonitor() {
           <div className="flex items-center justify-center h-full">
             <div className="text-center">
               <RefreshCw className="w-8 h-8 text-neutral-400 animate-spin mx-auto mb-3" />
-              <p className="text-xs font-mono uppercase tracking-widest text-neutral-500">Consultando API interna de temperaturas...</p>
+              <p className="text-xs font-mono uppercase tracking-widest text-neutral-500">Consultando origen de temperaturas...</p>
             </div>
           </div>
         )}
