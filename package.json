@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start -p 5000 -H 0.0.0.0",
     "lint": "eslint .",
-    "clean": "next clean"
+    "clean": "rm -rf .next .turbo"
   },
   "dependencies": {
     "@google/genai": "^1.17.0",
