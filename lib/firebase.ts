@@ -15,6 +15,8 @@ const missingFirebaseEnvVars = requiredFirebaseEnvVars.filter(
   (envVar) => !process.env[envVar],
 );
 
+export const isFirebaseConfigured = missingFirebaseEnvVars.length === 0;
+
 if (missingFirebaseEnvVars.length > 0) {
   console.warn(
     `Missing Firebase environment variables: ${missingFirebaseEnvVars.join(", ")}. Falling back to placeholder Firebase config.`,
