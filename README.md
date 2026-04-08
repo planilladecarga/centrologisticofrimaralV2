@@ -61,3 +61,35 @@ Este proyecto ya está preparado para desplegar en GitHub Pages:
 
 6. Espera que termine la acción y abre:
    `https://planilladecarga.github.io/centrologisticofrimaralV2/`
+
+## Resolver conflictos de merge (cuando GitHub dice "This branch has conflicts")
+
+Si el PR no te deja hacer merge/pull, resuélvelo por terminal:
+
+```bash
+git checkout <tu-rama-del-pr>
+git fetch origin
+git merge origin/main
+```
+
+Si aparecen conflictos en archivos como:
+- `app/page.tsx`
+- `components/PdfProcessor.tsx`
+- `lib/firebase.ts`
+
+haz lo siguiente:
+
+1. Abre cada archivo y elimina los bloques:
+   - `<<<<<<<`
+   - `=======`
+   - `>>>>>>>`
+2. Conserva la versión correcta (en este proyecto, la versión **sin Firebase** y con persistencia local).
+3. Marca resueltos y crea commit:
+
+```bash
+git add app/page.tsx components/PdfProcessor.tsx lib/firebase.ts
+git commit -m "Resolve merge conflicts with main"
+git push origin <tu-rama-del-pr>
+```
+
+Luego vuelve al PR y ya te permitirá hacer merge.
