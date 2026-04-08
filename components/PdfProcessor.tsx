@@ -251,16 +251,31 @@ export default function PdfProcessor({ inventoryData = [] }: PdfProcessorProps) 
     const foundInventoryKeys = new Set<string>();
 
     allPallets.forEach(pallet => {
-      const searchNum = pallet.palletNumber.replace(/^0+/, '');
+      const normalizeId = (value: string | number | undefined | null) => {
+        const raw = String(value ?? '').trim();
+        const stripped = raw.replace(/[^0-9]/g, '');
+        return {
+          raw: raw.replace(/^0+/, ''),
+          stripped: stripped.replace(/^0+/, ''),
+        };
+      };
+
+      const searchId = normalizeId(pallet.palletNumber);
       let matched = false;
 
-      // Match against numeroCliente (pallet/lot number in inventory)
+      // Match against numeroCliente and lote (muchos pallets vienen en "Nro Lote")
       for (const invItem of inventoryData) {
-        const targetNum = String(invItem.numeroCliente).trim().replace(/^0+/, '');
-        const targetStripped = targetNum.replace(/[^0-9]/g, '');
-        const searchStripped = searchNum.replace(/[^0-9]/g, '');
+        const candidates = [
+          normalizeId(invItem.numeroCliente),
+          normalizeId((invItem as any).lote),
+        ];
 
-        if (targetStripped === searchStripped || targetNum === searchNum) {
+        const isMatch = candidates.some(candidate =>
+          (candidate.stripped && candidate.stripped === searchId.stripped) ||
+          (candidate.raw && candidate.raw === searchId.raw)
+        );
+
+        if (isMatch) {
           const key = invItem.id || `${invItem.numeroCliente}-${invItem.producto}`;
           const existing = foundItems.find(f => (f.item.id || '') === (invItem.id || ''));
           if (existing) {
