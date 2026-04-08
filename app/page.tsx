@@ -250,7 +250,7 @@ export default function LogisticsDashboard() {
         setToastMessage({ text: "¡Inventario actualizado y guardado localmente!", type: 'success' });
       } catch (error) {
         console.error("Error al guardar inventario local:", error);
-        setToastMessage({ text: "Hubo un error al subir los datos.", type: 'error' });
+        setToastMessage({ text: "Error al guardar el inventario localmente (posiblemente por límite de espacio en el navegador).", type: 'error' });
       } finally {
         setIsUploading(false);
         if (fileInputRef.current) fileInputRef.current.value = '';
