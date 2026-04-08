@@ -289,7 +289,7 @@ export default function TemperatureMonitor() {
                       <CartesianGrid strokeDasharray="3 3" stroke="#e5e5e5" />
                       <XAxis dataKey="hora" tick={{ fontSize: 10, fontFamily: 'monospace' }} stroke="#a3a3a3" />
                       <YAxis domain={['dataMin - 1', 'dataMax + 1']} tick={{ fontSize: 10, fontFamily: 'monospace' }} stroke="#a3a3a3" />
-                      <Tooltip contentStyle={{ fontFamily: 'monospace', fontSize: 12 }} formatter={(v: number) => [`${Number(v).toFixed(2)} °C`, 'Temp']} />
+                      <Tooltip contentStyle={{ fontFamily: 'monospace', fontSize: 12 }} formatter={(v) => [`${Number(v).toFixed(2)} °C`, 'Temp']} />
                       <Area type="monotone" dataKey="valor" stroke="#ef4444" strokeWidth={2} fill="url(#tg)" />
                     </AreaChart>
                   </ResponsiveContainer>
