@@ -254,11 +254,9 @@ export default function PdfProcessor({ inventoryData = [] }: PdfProcessorProps) 
       const normalizeId = (value: string | number | undefined | null) => {
         const raw = String(value ?? '').trim();
         const stripped = raw.replace(/[^0-9]/g, '');
-        const tokens = (raw.match(/\d{5,}/g) || []).map(token => token.replace(/^0+/, '')).filter(Boolean);
         return {
           raw: raw.replace(/^0+/, ''),
           stripped: stripped.replace(/^0+/, ''),
-          tokens,
         };
       };
 
@@ -274,8 +272,7 @@ export default function PdfProcessor({ inventoryData = [] }: PdfProcessorProps) 
 
         const isMatch = candidates.some(candidate =>
           (candidate.stripped && candidate.stripped === searchId.stripped) ||
-          (candidate.raw && candidate.raw === searchId.raw) ||
-          candidate.tokens.includes(searchId.stripped)
+          (candidate.raw && candidate.raw === searchId.raw)
         );
 
         if (isMatch) {
