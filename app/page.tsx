@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useRef, useEffect, useMemo } from 'react';
-import { db } from '../lib/firebase';
+import { db, isFirebaseConfigured } from '../lib/firebase';
 import { collection, onSnapshot, writeBatch, doc, getDocs, addDoc, serverTimestamp, query, orderBy, limit } from 'firebase/firestore';
 import dynamic from 'next/dynamic';
 
@@ -19,6 +19,7 @@ interface ActivityRecord {
 }
 
 export default function LogisticsDashboard() {
+  const INVENTORY_CACHE_KEY = 'frimaral_inventory_cache_v1';
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [activeTab, setActiveTab] = useState('dashboard');
   const [inventoryData, setInventoryData] = useState<any[]>([]);
@@ -59,10 +60,41 @@ export default function LogisticsDashboard() {
 
   // Real-time inventory listener
   useEffect(() => {
-    const unsubscribe = onSnapshot(collection(db, 'inventory'), (snapshot) => {
-      const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      setInventoryData(data);
-    });
+    const loadCachedInventory = () => {
+      try {
+        const cachedRaw = localStorage.getItem(INVENTORY_CACHE_KEY);
+        if (!cachedRaw) return;
+        const parsed = JSON.parse(cachedRaw);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          setInventoryData(parsed);
+        }
+      } catch (error) {
+        console.warn('No se pudo leer caché local de inventario:', error);
+      }
+    };
+
+    if (!isFirebaseConfigured) {
+      loadCachedInventory();
+      return;
+    }
+
+    const unsubscribe = onSnapshot(
+      collection(db, 'inventory'),
+      (snapshot) => {
+        const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        setInventoryData(data);
+        try {
+          localStorage.setItem(INVENTORY_CACHE_KEY, JSON.stringify(data));
+        } catch (error) {
+          console.warn('No se pudo actualizar caché local de inventario:', error);
+        }
+      },
+      (error) => {
+        console.error('Error escuchando inventario en Firebase. Usando caché local.', error);
+        loadCachedInventory();
+      }
+    );
+
     return () => unsubscribe();
   }, []);
 
@@ -244,6 +276,15 @@ export default function LogisticsDashboard() {
 
       setIsUploading(true);
       try {
+        // Actualiza UI inmediatamente y deja respaldo local aun si Firebase falla.
+        setInventoryData(mappedData);
+        localStorage.setItem(INVENTORY_CACHE_KEY, JSON.stringify(mappedData));
+
+        if (!isFirebaseConfigured) {
+          setToastMessage({ text: "Inventario guardado localmente (Firebase no configurado en este entorno).", type: 'success' });
+          return;
+        }
+
         const snapshot = await getDocs(collection(db, 'inventory'));
         const deleteBatches = [];
         let currentDeleteBatch = writeBatch(db);
