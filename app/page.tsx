@@ -163,7 +163,9 @@ export default function LogisticsDashboard() {
     setIsResetting(true);
     try {
       setInventoryData([]);
+      setActivityRecords([]);
       localStorage.removeItem(INVENTORY_CACHE_KEY);
+      localStorage.removeItem(ACTIVITY_CACHE_KEY);
       setToastMessage({ text: "¡Base de datos reseteada a fábrica exitosamente!", type: 'success' });
       setIsResetModalOpen(false);
     } catch (error) {
