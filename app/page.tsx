@@ -1,8 +1,6 @@
 'use client';
 
 import React, { useState, useRef, useEffect, useMemo } from 'react';
-import { db, isFirebaseConfigured } from '../lib/firebase';
-import { collection, onSnapshot, writeBatch, doc, getDocs, addDoc, serverTimestamp, query, orderBy, limit } from 'firebase/firestore';
 import dynamic from 'next/dynamic';
 
 const PdfProcessor = dynamic(() => import('../components/PdfProcessor'), { ssr: false });
@@ -20,6 +18,7 @@ interface ActivityRecord {
 
 export default function LogisticsDashboard() {
   const INVENTORY_CACHE_KEY = 'frimaral_inventory_cache_v1';
+  const ACTIVITY_CACHE_KEY = 'frimaral_activity_cache_v1';
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [activeTab, setActiveTab] = useState('dashboard');
   const [inventoryData, setInventoryData] = useState<any[]>([]);
@@ -58,54 +57,32 @@ export default function LogisticsDashboard() {
   // Clean dots from numeroCliente
   const cleanNum = (num: string) => String(num || '').replace(/\./g, '');
 
-  // Real-time inventory listener
+  // Load cached inventory
   useEffect(() => {
-    const loadCachedInventory = () => {
-      try {
-        const cachedRaw = localStorage.getItem(INVENTORY_CACHE_KEY);
-        if (!cachedRaw) return;
-        const parsed = JSON.parse(cachedRaw);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          setInventoryData(parsed);
-        }
-      } catch (error) {
-        console.warn('No se pudo leer caché local de inventario:', error);
+    try {
+      const cachedRaw = localStorage.getItem(INVENTORY_CACHE_KEY);
+      if (!cachedRaw) return;
+      const parsed = JSON.parse(cachedRaw);
+      if (Array.isArray(parsed)) {
+        setInventoryData(parsed);
       }
-    };
-
-    if (!isFirebaseConfigured) {
-      loadCachedInventory();
-      return;
+    } catch (error) {
+      console.warn('No se pudo leer caché local de inventario:', error);
     }
-
-    const unsubscribe = onSnapshot(
-      collection(db, 'inventory'),
-      (snapshot) => {
-        const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-        setInventoryData(data);
-        try {
-          localStorage.setItem(INVENTORY_CACHE_KEY, JSON.stringify(data));
-        } catch (error) {
-          console.warn('No se pudo actualizar caché local de inventario:', error);
-        }
-      },
-      (error) => {
-        console.error('Error escuchando inventario en Firebase. Usando caché local.', error);
-        loadCachedInventory();
-      }
-    );
-
-    return () => unsubscribe();
   }, []);
 
-  // Real-time activity records listener
+  // Load cached activity records
   useEffect(() => {
-    const q = query(collection(db, 'activity'), orderBy('createdAt', 'desc'), limit(50));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const records = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as ActivityRecord));
-      setActivityRecords(records);
-    });
-    return () => unsubscribe();
+    try {
+      const cachedRaw = localStorage.getItem(ACTIVITY_CACHE_KEY);
+      if (!cachedRaw) return;
+      const parsed = JSON.parse(cachedRaw);
+      if (Array.isArray(parsed)) {
+        setActivityRecords(parsed);
+      }
+    } catch (error) {
+      console.warn('No se pudo leer caché local de actividad:', error);
+    }
   }, []);
 
   // KPIs computed from real data
@@ -132,14 +109,19 @@ export default function LogisticsDashboard() {
     }
     setIsSavingRecord(true);
     try {
-      await addDoc(collection(db, 'activity'), {
+      const newActivity: ActivityRecord = {
+        id: Math.random().toString(36).substring(2, 15),
         guiaId: newRecord.guiaId.trim().toUpperCase(),
         tipoOperacion: newRecord.tipoOperacion,
         placaVehiculo: newRecord.placaVehiculo.trim().toUpperCase(),
         observaciones: newRecord.observaciones.trim().toUpperCase(),
         estado: 'ESPERANDO',
-        createdAt: serverTimestamp()
-      });
+        createdAt: new Date().toISOString()
+      };
+      const updatedRecords = [newActivity, ...activityRecords].slice(0, 50);
+      setActivityRecords(updatedRecords);
+      localStorage.setItem(ACTIVITY_CACHE_KEY, JSON.stringify(updatedRecords));
+
       setToastMessage({ text: "¡Registro guardado exitosamente!", type: 'success' });
       setIsModalOpen(false);
       setNewRecord({ tipoOperacion: 'INGRESO (RECEPCIÓN)', placaVehiculo: '', guiaId: '', observaciones: '' });
@@ -153,10 +135,11 @@ export default function LogisticsDashboard() {
 
   const handleUpdateActivityStatus = async (recordId: string, newStatus: string) => {
     try {
-      const batch = writeBatch(db);
-      const ref = doc(db, 'activity', recordId);
-      batch.update(ref, { estado: newStatus });
-      await batch.commit();
+      const updatedRecords = activityRecords.map(r => 
+        r.id === recordId ? { ...r, estado: newStatus } : r
+      );
+      setActivityRecords(updatedRecords);
+      localStorage.setItem(ACTIVITY_CACHE_KEY, JSON.stringify(updatedRecords));
       setToastMessage({ text: `Estado actualizado a: ${newStatus}`, type: 'success' });
     } catch (error) {
       console.error("Error al actualizar estado:", error);
@@ -166,7 +149,7 @@ export default function LogisticsDashboard() {
 
   const getTimeAgo = (createdAt: any) => {
     if (!createdAt) return '--';
-    const date = createdAt.toDate ? createdAt.toDate() : new Date(createdAt);
+    const date = new Date(createdAt);
     const now = new Date();
     const diffMs = now.getTime() - date.getTime();
     const diffMin = Math.floor(diffMs / 60000);
@@ -179,21 +162,8 @@ export default function LogisticsDashboard() {
   const handleResetDatabase = async () => {
     setIsResetting(true);
     try {
-      const snapshot = await getDocs(collection(db, 'inventory'));
-      const deleteBatches = [];
-      let currentDeleteBatch = writeBatch(db);
-      let deleteCount = 0;
-      snapshot.docs.forEach((document) => {
-        currentDeleteBatch.delete(document.ref);
-        deleteCount++;
-        if (deleteCount === 490) {
-          deleteBatches.push(currentDeleteBatch);
-          currentDeleteBatch = writeBatch(db);
-          deleteCount = 0;
-        }
-      });
-      if (deleteCount > 0) deleteBatches.push(currentDeleteBatch);
-      for (const batch of deleteBatches) await batch.commit();
+      setInventoryData([]);
+      localStorage.removeItem(INVENTORY_CACHE_KEY);
       setToastMessage({ text: "¡Base de datos reseteada a fábrica exitosamente!", type: 'success' });
       setIsResetModalOpen(false);
     } catch (error) {
@@ -276,49 +246,11 @@ export default function LogisticsDashboard() {
 
       setIsUploading(true);
       try {
-        // Actualiza UI inmediatamente y deja respaldo local aun si Firebase falla.
         setInventoryData(mappedData);
         localStorage.setItem(INVENTORY_CACHE_KEY, JSON.stringify(mappedData));
-
-        if (!isFirebaseConfigured) {
-          setToastMessage({ text: "Inventario guardado localmente (Firebase no configurado en este entorno).", type: 'success' });
-          return;
-        }
-
-        const snapshot = await getDocs(collection(db, 'inventory'));
-        const deleteBatches = [];
-        let currentDeleteBatch = writeBatch(db);
-        let deleteCount = 0;
-        snapshot.docs.forEach((document) => {
-          currentDeleteBatch.delete(document.ref);
-          deleteCount++;
-          if (deleteCount === 490) {
-            deleteBatches.push(currentDeleteBatch);
-            currentDeleteBatch = writeBatch(db);
-            deleteCount = 0;
-          }
-        });
-        if (deleteCount > 0) deleteBatches.push(currentDeleteBatch);
-        for (const batch of deleteBatches) await batch.commit();
-
-        const addBatches = [];
-        let currentAddBatch = writeBatch(db);
-        let addCount = 0;
-        mappedData.forEach((item) => {
-          const newDocRef = doc(collection(db, 'inventory'));
-          currentAddBatch.set(newDocRef, item);
-          addCount++;
-          if (addCount === 490) {
-            addBatches.push(currentAddBatch);
-            currentAddBatch = writeBatch(db);
-            addCount = 0;
-          }
-        });
-        if (addCount > 0) addBatches.push(currentAddBatch);
-        for (const batch of addBatches) await batch.commit();
-        setToastMessage({ text: "¡Inventario actualizado correctamente en la nube!", type: 'success' });
+        setToastMessage({ text: "Inventario guardado localmente.", type: 'success' });
       } catch (error) {
-        console.error("Error crítico al subir a Firebase:", error);
+        console.error("Error crítico al subir datos:", error);
         setToastMessage({ text: "Hubo un error al subir los datos.", type: 'error' });
       } finally {
         setIsUploading(false);
