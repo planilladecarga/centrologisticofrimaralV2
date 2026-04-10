@@ -1,14 +1,19 @@
 import type {Metadata} from 'next';
-import './globals.css';
+import './globals.css'; // Global styles
 
 export const metadata: Metadata = {
-  title: 'Centro Logístico Frimaral V2',
-  description: 'Sistema de gestión logística para Centro Logístico Frimaral - Inventario, Despachos y Control Operativo',
+  title: 'My Google AI Studio App',
+  description: 'My Google AI Studio App',
 };
 
 export default function RootLayout({children}: {children: React.ReactNode}) {
   return (
-    <html lang="es">
+    <html lang="en">
+      <head>
+        <meta httpEquiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+        <meta httpEquiv="Pragma" content="no-cache" />
+        <meta httpEquiv="Expires" content="0" />
+      </head>
       <body suppressHydrationWarning>{children}</body>
     </html>
   );
