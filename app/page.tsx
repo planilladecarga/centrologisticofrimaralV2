@@ -13,7 +13,7 @@ interface ActivityRecord {
   placaVehiculo: string;
   observaciones: string;
   estado: string;
-  createdAt: any;
+  createdAt: string;
 }
 
 export default function LogisticsDashboard() {
@@ -110,7 +110,7 @@ export default function LogisticsDashboard() {
     setIsSavingRecord(true);
     try {
       const newActivity: ActivityRecord = {
-        id: Math.random().toString(36).substring(2, 15),
+        id: crypto.randomUUID(),
         guiaId: newRecord.guiaId.trim().toUpperCase(),
         tipoOperacion: newRecord.tipoOperacion,
         placaVehiculo: newRecord.placaVehiculo.trim().toUpperCase(),
@@ -694,10 +694,10 @@ export default function LogisticsDashboard() {
 
         {/* ===== MODAL RESETEO ===== */}
         {isResetModalOpen && (
-          <div className="absolute inset-0 z-50 flex items-center justify-center bg-neutral-900/50 backdrop-blur-sm">
+          <div className="absolute inset-0 z-50 flex items-center justify-center bg-neutral-900/50 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="reset-modal-title">
             <div className="bg-white w-full max-w-md border border-neutral-200 shadow-2xl">
               <div className="flex items-center justify-between p-6 border-b border-neutral-200 bg-red-50">
-                <h3 className="text-sm font-mono uppercase tracking-widest text-red-900">Confirmar Reseteo Total</h3>
+                <h3 id="reset-modal-title" className="text-sm font-mono uppercase tracking-widest text-red-900">Confirmar Reseteo Total</h3>
                 <button onClick={() => setIsResetModalOpen(false)} className="text-red-900 hover:text-red-700 font-mono text-xl leading-none" disabled={isResetting}>&times;</button>
               </div>
               <div className="p-8">
@@ -719,10 +719,10 @@ export default function LogisticsDashboard() {
 
         {/* ===== MODAL NUEVO REGISTRO ===== */}
         {isModalOpen && (
-          <div className="absolute inset-0 z-50 flex items-center justify-center bg-neutral-900/50 backdrop-blur-sm">
+          <div className="absolute inset-0 z-50 flex items-center justify-center bg-neutral-900/50 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="new-record-modal-title">
             <div className="bg-white w-full max-w-2xl border border-neutral-200 shadow-2xl">
               <div className="flex items-center justify-between p-6 border-b border-neutral-200 bg-neutral-50">
-                <h3 className="text-sm font-mono uppercase tracking-widest text-neutral-900">Nuevo Registro Operativo</h3>
+                <h3 id="new-record-modal-title" className="text-sm font-mono uppercase tracking-widest text-neutral-900">Nuevo Registro Operativo</h3>
                 <button onClick={() => setIsModalOpen(false)} className="text-neutral-500 hover:text-neutral-900 font-mono text-xl leading-none">&times;</button>
               </div>
               <div className="p-8 space-y-6">

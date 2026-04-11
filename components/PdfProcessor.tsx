@@ -254,7 +254,7 @@ export default function PdfProcessor({ inventoryData = [] }: PdfProcessorProps) 
       const normalizeId = (value: string | number | undefined | null) => {
         const raw = String(value ?? '').trim();
         const stripped = raw.replace(/[^0-9]/g, '');
-        const tokens = (raw.match(/\\d{5,}/g) || []).map(token => token.replace(/^0+/, '')).filter(Boolean);
+        const tokens = (raw.match(/\d{5,}/g) || []).map(token => token.replace(/^0+/, '')).filter(Boolean);
         return {
           raw: raw.replace(/^0+/, ''),
           stripped: stripped.replace(/^0+/, ''),
