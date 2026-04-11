@@ -369,32 +369,28 @@ export default function PdfProcessor({ inventoryData = [] }: PdfProcessorProps) 
     const wb = XLSX.utils.book_new();
     const wsData: any[][] = [];
 
-    // Collect all searched pallet numbers for highlighting
-    const searchedPalletNumbers = new Set<string>();
-    results.foundItems.forEach(({ pdfPallets }) => {
-      pdfPallets.forEach(p => searchedPalletNumbers.add(p.palletNumber));
-    });
+    // Track which rows should have highlighted Pallet ID (yellow)
+    const highlightedRows = new Set<number>();
 
-    // Collect all COTE codes from searched items
+    // Collect all COTE codes from ALL items in searched containers
     const coteSet = new Set<string>();
-    results.foundItems.forEach(({ item }) => {
-      const coteMatch = (item.producto || '').match(/COTE\s+P?\d+/i);
-      if (coteMatch) {
-        const cote = coteMatch[0].replace(/COTE\s*/i, 'P');
-        coteSet.add(cote);
-      }
-    });
-
-    // Collect all searched pallet IDs for the "Descripción" column
-    const searchedItemDescriptions = new Map<string, { producto: string; palletId: string }>();
-    results.foundItems.forEach(({ item, pdfPallets }) => {
-      pdfPallets.forEach(p => {
-        const desc = item.producto || p.palletNumber;
-        searchedItemDescriptions.set(p.palletNumber, { producto: item.producto, palletId: p.palletNumber });
+    containerGroups.forEach(group => {
+      group.items.forEach(({ inventoryItem, isSearched }) => {
+        const producto = inventoryItem.producto || '';
+        const coteMatches = producto.match(/COTE\s+P?\d+/gi) || [];
+        coteMatches.forEach(c => {
+          const normalized = c.replace(/COTE\s*/i, 'P');
+          coteSet.add(normalized);
+        });
       });
     });
 
-    // Title row
+    // Calculate summary totals from searched items only
+    const totalSearchedPallets = results.foundItems.reduce((s, fi) => s + fi.pdfPallets.length, 0);
+    const totalSearchedCajas = results.foundItems.reduce((s, fi) => s + fi.pdfPallets.reduce((ps, p) => ps + p.cajas, 0), 0);
+    const totalSearchedKilos = results.foundItems.reduce((s, fi) => s + fi.pdfPallets.reduce((ps, p) => ps + p.kilos, 0), 0);
+
+    // Title
     wsData.push(['PLANILLA DE CARGA', '', '', '', '', '', '']);
     wsData.push([]);
     // Headers
@@ -403,11 +399,18 @@ export default function PdfProcessor({ inventoryData = [] }: PdfProcessorProps) 
     // Data rows per container
     containerGroups.forEach((group) => {
       group.items.forEach(({ inventoryItem, pdfPallets, isSearched }) => {
-        const palletId = inventoryItem.numeroCliente || '';
-        const isHighlighted = isSearched || pdfPallets.length > 0;
+        // Pallet ID: for searched items use the PDF pallet number, for others use the lote
+        const palletId = (isSearched && pdfPallets.length > 0)
+          ? pdfPallets[0].palletNumber
+          : (inventoryItem.lote || inventoryItem.numeroCliente || '');
+        const isHighlighted = isSearched && pdfPallets.length > 0;
         const descripcion = inventoryItem.producto || palletId;
-        const bultos = inventoryItem.cantidad || (pdfPallets.length > 0 ? pdfPallets[0].cajas : 0);
-        const peso = inventoryItem.kilos || (pdfPallets.length > 0 ? pdfPallets[0].kilos : 0);
+        const bultos = inventoryItem.cantidad || 0;
+        const peso = inventoryItem.kilos || 0;
+
+        if (isHighlighted) {
+          highlightedRows.add(wsData.length); // track by array index
+        }
 
         wsData.push([
           group.contenedor,
@@ -423,7 +426,24 @@ export default function PdfProcessor({ inventoryData = [] }: PdfProcessorProps) 
       wsData.push([]);
     });
 
+    // RESUMEN TOTAL (SOLO BUSCADOS) - include in wsData so it's within range
+    wsData.push([]); // extra blank row
+    wsData.push(['', '', '', '', 'RESUMEN TOTAL (SOLO BUSCADOS)', '', '']);
+    wsData.push(['', '', '', '', 'TOTAL PALLETS', 'CAJAS', 'KG']);
+    wsData.push(['', '', '', '', totalSearchedPallets, totalSearchedCajas, Math.round(totalSearchedKilos)]);
+
+    // COTES DE INGRESO (UNICOS)
+    wsData.push([]);
+    wsData.push(['', '', '', '', 'COTES DE INGRESO (UNICOS)', '', '']);
+    const sortedCotes = Array.from(coteSet).sort();
+    sortedCotes.forEach(cote => {
+      wsData.push(['', '', '', '', cote, '', '']);
+    });
+
     const ws = XLSX.utils.aoa_to_sheet(wsData);
+
+    // Extend range to include all data
+    ws['!ref'] = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: wsData.length - 1, c: 6 } });
 
     // Merge title row A1:G1
     ws['!merges'] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: 6 } }];
@@ -458,75 +478,39 @@ export default function PdfProcessor({ inventoryData = [] }: PdfProcessorProps) 
     // Apply title style
     if (ws['A1']) ws['A1'].s = titleStyle;
 
-    // Apply header style (row 3)
+    // Apply header style (row index 2 in wsData = row 3 in Excel)
     const headerCols = ['A', 'B', 'C', 'D', 'E', 'F', 'G'];
     headerCols.forEach(col => {
       const cellRef = `${col}3`;
       if (ws[cellRef]) ws[cellRef].s = headerStyle;
     });
 
-    // Apply data styles (starting from row 4)
-    let dataRow = 4;
-    containerGroups.forEach((group) => {
-      group.items.forEach(({ inventoryItem, pdfPallets, isSearched }) => {
-        const palletId = inventoryItem.numeroCliente || '';
-        const isHighlighted = isSearched || pdfPallets.length > 0;
-        const styleToApply = isHighlighted ? highlightedStyle : normalStyle;
+    // Apply data styles starting from row 4 (wsData index 3)
+    // wsData[0] = title (row 1), [1] = blank (row 2), [2] = headers (row 3), [3] = first data (row 4)
+    for (let i = 3; i < wsData.length; i++) {
+      const row = i + 1; // Excel row (1-based)
+      const rowData = wsData[i];
+      if (!rowData || rowData.every(c => c === '' || c === null || c === undefined)) continue; // skip blank rows
 
-        headerCols.forEach(col => {
-          const cellRef = `${col}${dataRow}`;
-          if (!ws[cellRef]) ws[cellRef] = { t: 's', v: '' };
-          // Apply highlight only to G column (Pallet ID) for searched items
-          if (col === 'G' && isHighlighted) {
-            ws[cellRef].s = highlightedStyle;
-          } else {
-            ws[cellRef].s = normalStyle;
-          }
-        });
-        dataRow++;
+      const isHighlighted = highlightedRows.has(i);
+      const isSummaryHeader = rowData[4] && typeof rowData[4] === 'string' &&
+        (rowData[4].includes('RESUMEN TOTAL') || rowData[4].includes('COTES DE INGRESO'));
+      const isSummaryColHeader = rowData[4] && typeof rowData[4] === 'string' &&
+        (rowData[4] === 'TOTAL PALLETS' || rowData[4] === 'CAJAS');
+
+      headerCols.forEach(col => {
+        const cellRef = `${col}${row}`;
+        if (!ws[cellRef]) ws[cellRef] = { t: 's', v: '' };
+
+        if (isSummaryHeader || isSummaryColHeader) {
+          ws[cellRef].s = { font: { bold: true, sz: 10 } };
+        } else if (isHighlighted && col === 'G') {
+          ws[cellRef].s = highlightedStyle;
+        } else {
+          ws[cellRef].s = normalStyle;
+        }
       });
-      dataRow++; // blank separator row
-    });
-
-    // --- Summary section ---
-    // Find last data row
-    const lastDataRow = dataRow - 1;
-
-    // RESUMEN TOTAL (SOLO BUSCADOS)
-    const totalSearchedPallets = results.foundItems.reduce((s, fi) => s + fi.pdfPallets.length, 0);
-    const totalSearchedCajas = results.foundItems.reduce((s, fi) => s + fi.pdfPallets.reduce((ps, p) => ps + p.cajas, 0), 0);
-    const totalSearchedKilos = results.foundItems.reduce((s, fi) => s + fi.pdfPallets.reduce((ps, p) => ps + p.kilos, 0), 0);
-
-    const summaryStartRow = lastDataRow + 2;
-    const eCol = `E${summaryStartRow}`;
-    if (!ws[eCol]) ws[eCol] = { t: 's', v: 'RESUMEN TOTAL (SOLO BUSCADOS)' };
-    ws[eCol].s = { font: { bold: true, sz: 11 } };
-
-    ws[`E${summaryStartRow + 1}`] = { t: 's', v: 'TOTAL PALLETS' };
-    ws[`F${summaryStartRow + 1}`] = { t: 's', v: 'CAJAS' };
-    ws[`G${summaryStartRow + 1}`] = { t: 's', v: 'KG' };
-    [ws[`E${summaryStartRow + 1}`], ws[`F${summaryStartRow + 1}`], ws[`G${summaryStartRow + 1}`]].forEach(c => {
-      c.s = { font: { bold: true, sz: 10 } };
-    });
-
-    ws[`E${summaryStartRow + 2}`] = { t: 'n', v: totalSearchedPallets };
-    ws[`F${summaryStartRow + 2}`] = { t: 'n', v: totalSearchedCajas };
-    ws[`G${summaryStartRow + 2}`] = { t: 'n', v: Math.round(totalSearchedKilos) };
-    [ws[`E${summaryStartRow + 2}`], ws[`F${summaryStartRow + 2}`], ws[`G${summaryStartRow + 2}`]].forEach(c => {
-      c.s = { font: { sz: 10 } };
-    });
-
-    // COTES DE INGRESO (UNICOS)
-    const cotesStartRow = summaryStartRow + 4;
-    if (!ws[`E${cotesStartRow}`]) ws[`E${cotesStartRow}`] = { t: 's', v: 'COTES DE INGRESO (UNICOS)' };
-    ws[`E${cotesStartRow}`].s = { font: { bold: true, sz: 11 } };
-
-    const sortedCotes = Array.from(coteSet).sort();
-    sortedCotes.forEach((cote, i) => {
-      const row = cotesStartRow + 1 + i;
-      if (!ws[`E${row}`]) ws[`E${row}`] = { t: 's', v: cote };
-      ws[`E${row}`].s = { font: { sz: 10 } };
-    });
+    }
 
     // Column widths
     ws['!cols'] = [
