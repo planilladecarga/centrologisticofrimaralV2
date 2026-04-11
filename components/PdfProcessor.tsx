@@ -15,6 +15,8 @@ interface InventoryItem {
   numeroCliente: string;
   cliente: string;
   producto: string;
+  contenedor?: string;
+  lote?: string;
   pallets: number;
   cantidad: number;
   kilos: number;
@@ -31,7 +33,8 @@ interface PalletFromPdf {
 }
 
 interface ContainerGroup {
-  cliente: string;
+  contenedor: string;
+  clientes: string[];
   items: {
     inventoryItem: InventoryItem;
     pdfPallets: PalletFromPdf[];
@@ -67,14 +70,14 @@ export default function PdfProcessor({ inventoryData = [] }: PdfProcessorProps) 
     }
   }, []);
 
-  // Group found items by container (cliente)
+  // Group found items by container (contenedor)
   const containerGroups = useMemo<ContainerGroup[]>(() => {
     if (!results || results.foundItems.length === 0) return [];
 
     const groupMap = new Map<string, ContainerGroup>();
 
     results.foundItems.forEach(({ item, pdfPallets: pdfs }) => {
-      const key = item.cliente;
+      const key = item.contenedor || 'SIN CONTENEDOR';
       if (groupMap.has(key)) {
         const group = groupMap.get(key)!;
         // Check if we already have this exact item
@@ -84,6 +87,10 @@ export default function PdfProcessor({ inventoryData = [] }: PdfProcessorProps) 
         } else {
           group.items.push({ inventoryItem: item, pdfPallets: pdfs });
         }
+        // Add cliente to the list if not already there
+        if (item.cliente && !group.clientes.includes(item.cliente)) {
+          group.clientes.push(item.cliente);
+        }
         pdfs.forEach(p => {
           group.totalPdfCajas += p.cajas;
           group.totalPdfKilos += p.kilos;
@@ -91,7 +98,8 @@ export default function PdfProcessor({ inventoryData = [] }: PdfProcessorProps) 
         group.totalInvKilos += Number(item.kilos) || 0;
       } else {
         const newGroup: ContainerGroup = {
-          cliente: key,
+          contenedor: key,
+          clientes: item.cliente ? [item.cliente] : [],
           items: [{ inventoryItem: item, pdfPallets: pdfs }],
           totalPdfCajas: 0,
           totalPdfKilos: 0,
@@ -304,7 +312,7 @@ export default function PdfProcessor({ inventoryData = [] }: PdfProcessorProps) 
     // Auto-expand all groups
     if (foundItems.length > 0) {
       const allKeys = new Set<string>();
-      foundItems.forEach(({ item }) => allKeys.add(item.cliente));
+      foundItems.forEach(({ item }) => allKeys.add(item.contenedor || 'SIN CONTENEDOR'));
       setExpandedGroups(allKeys);
     }
   };
@@ -340,7 +348,7 @@ export default function PdfProcessor({ inventoryData = [] }: PdfProcessorProps) 
 
     containerGroups.forEach((group, groupIdx) => {
       // Container header
-      wsData.push([`CONTENEDOR ${groupIdx + 1}: ${group.cliente}`, '', '', '', '']);
+      wsData.push([`CONTENEDOR ${groupIdx + 1}: ${group.contenedor}`, '', '', '', '']);
       currentRow++;
 
       // Column headers
@@ -622,7 +630,7 @@ export default function PdfProcessor({ inventoryData = [] }: PdfProcessorProps) 
 
                 <div className="divide-y divide-neutral-200">
                   {containerGroups.map((group, groupIdx) => {
-                    const groupKey = group.cliente;
+                    const groupKey = group.contenedor;
                     const isExpanded = expandedGroups.has(groupKey);
                     return (
                       <div key={groupKey}>
@@ -639,11 +647,15 @@ export default function PdfProcessor({ inventoryData = [] }: PdfProcessorProps) 
                             <div>
                               <div className="flex items-center gap-3">
                                 <span className="text-xs font-mono uppercase tracking-widest text-neutral-900 font-medium">
-                                  {group.cliente}
+                                  {group.contenedor}
                                 </span>
                                 <span className="px-2 py-0.5 bg-blue-100 text-blue-800 text-[10px] font-mono uppercase tracking-widest">
                                   {group.items.length} pallet{group.items.length !== 1 ? 's' : ''}
                                 </span>
+                              </div>
+                              <div className="flex items-center gap-1 text-[10px] font-mono text-neutral-500 mt-1">
+                                <span className="text-neutral-400">CLIENTE:</span>
+                                <span className="font-medium">{group.clientes.join(', ')}</span>
                               </div>
                               <div className="flex items-center gap-4 mt-1 text-[10px] font-mono text-neutral-500">
                                 <span>{group.totalPdfCajas} cajas</span>
