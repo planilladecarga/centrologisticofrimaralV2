@@ -38,6 +38,7 @@ interface ContainerGroup {
   items: {
     inventoryItem: InventoryItem;
     pdfPallets: PalletFromPdf[];
+    isSearched: boolean;
   }[];
   totalPdfCajas: number;
   totalPdfKilos: number;
@@ -76,12 +77,19 @@ export default function PdfProcessor({ inventoryData = [] }: PdfProcessorProps) 
 
     const groupMap = new Map<string, ContainerGroup>();
 
+    // First pass: group matched items by container
+    const searchedKeysByContainer = new Map<string, Set<string>>();
+
     results.foundItems.forEach(({ item, pdfPallets: pdfs }) => {
       const key = item.contenedor || 'SIN CONTENEDOR';
+      const itemKey = item.id || `${item.numeroCliente}|${item.producto}|${item.contenedor}`;
+
+      // Track which inventory items were searched per container
+      if (!searchedKeysByContainer.has(key)) searchedKeysByContainer.set(key, new Set());
+      searchedKeysByContainer.get(key)!.add(itemKey);
+
       if (groupMap.has(key)) {
         const group = groupMap.get(key)!;
-        // Check if we already have this exact item
-        const itemKey = item.id || `${item.numeroCliente}|${item.producto}|${item.contenedor}`;
         const existing = group.items.find(ei => {
           const eiKey = ei.inventoryItem.id || `${ei.inventoryItem.numeroCliente}|${ei.inventoryItem.producto}|${ei.inventoryItem.contenedor}`;
           return eiKey === itemKey;
@@ -89,9 +97,8 @@ export default function PdfProcessor({ inventoryData = [] }: PdfProcessorProps) 
         if (existing) {
           existing.pdfPallets.push(...pdfs);
         } else {
-          group.items.push({ inventoryItem: item, pdfPallets: pdfs });
+          group.items.push({ inventoryItem: item, pdfPallets: pdfs, isSearched: true });
         }
-        // Add cliente to the list if not already there
         if (item.cliente && !group.clientes.includes(item.cliente)) {
           group.clientes.push(item.cliente);
         }
@@ -104,7 +111,7 @@ export default function PdfProcessor({ inventoryData = [] }: PdfProcessorProps) 
         const newGroup: ContainerGroup = {
           contenedor: key,
           clientes: item.cliente ? [item.cliente] : [],
-          items: [{ inventoryItem: item, pdfPallets: pdfs }],
+          items: [{ inventoryItem: item, pdfPallets: pdfs, isSearched: true }],
           totalPdfCajas: 0,
           totalPdfKilos: 0,
           totalInvKilos: Number(item.kilos) || 0,
@@ -117,8 +124,40 @@ export default function PdfProcessor({ inventoryData = [] }: PdfProcessorProps) 
       }
     });
 
+    // Second pass: add ALL inventory items from matched containers (non-searched)
+    inventoryData.forEach(invItem => {
+      const containerKey = invItem.contenedor || 'SIN CONTENEDOR';
+      if (!groupMap.has(containerKey)) return; // Skip containers without matches
+
+      const itemKey = invItem.id || `${invItem.numeroCliente}|${invItem.producto}|${invItem.contenedor}`;
+      const searchedKeys = searchedKeysByContainer.get(containerKey);
+      if (searchedKeys && searchedKeys.has(itemKey)) return; // Already added as searched
+
+      const group = groupMap.get(containerKey)!;
+      // Check if already in group
+      const existing = group.items.find(ei => {
+        const eiKey = ei.inventoryItem.id || `${ei.inventoryItem.numeroCliente}|${ei.inventoryItem.producto}|${ei.inventoryItem.contenedor}`;
+        return eiKey === itemKey;
+      });
+      if (!existing) {
+        group.items.push({ inventoryItem: invItem, pdfPallets: [], isSearched: false });
+        if (invItem.cliente && !group.clientes.includes(invItem.cliente)) {
+          group.clientes.push(invItem.cliente);
+        }
+        group.totalInvKilos += Number(invItem.kilos) || 0;
+      }
+    });
+
+    // Sort items within each group: searched first, then by pallet number
+    groupMap.forEach(group => {
+      group.items.sort((a, b) => {
+        if (a.isSearched !== b.isSearched) return a.isSearched ? -1 : 1;
+        return a.inventoryItem.numeroCliente.localeCompare(b.inventoryItem.numeroCliente, undefined, { numeric: true });
+      });
+    });
+
     return Array.from(groupMap.values());
-  }, [results]);
+  }, [results, inventoryData]);
 
   const toggleGroup = (key: string) => {
     setExpandedGroups(prev => {
@@ -329,107 +368,182 @@ export default function PdfProcessor({ inventoryData = [] }: PdfProcessorProps) 
 
     const wb = XLSX.utils.book_new();
     const wsData: any[][] = [];
-    let currentRow = 0;
 
-    // Title
-    wsData.push([`PLANILLA DE CARGA${fileName ? ' — ' + fileName : ''}`, '', '', '', '']);
-    currentRow++;
+    // Collect all searched pallet numbers for highlighting
+    const searchedPalletNumbers = new Set<string>();
+    results.foundItems.forEach(({ pdfPallets }) => {
+      pdfPallets.forEach(p => searchedPalletNumbers.add(p.palletNumber));
+    });
+
+    // Collect all COTE codes from searched items
+    const coteSet = new Set<string>();
+    results.foundItems.forEach(({ item }) => {
+      const coteMatch = (item.producto || '').match(/COTE\s+P?\d+/i);
+      if (coteMatch) {
+        const cote = coteMatch[0].replace(/COTE\s*/i, 'P');
+        coteSet.add(cote);
+      }
+    });
+
+    // Collect all searched pallet IDs for the "Descripción" column
+    const searchedItemDescriptions = new Map<string, { producto: string; palletId: string }>();
+    results.foundItems.forEach(({ item, pdfPallets }) => {
+      pdfPallets.forEach(p => {
+        const desc = item.producto || p.palletNumber;
+        searchedItemDescriptions.set(p.palletNumber, { producto: item.producto, palletId: p.palletNumber });
+      });
+    });
+
+    // Title row
+    wsData.push(['PLANILLA DE CARGA', '', '', '', '', '', '']);
     wsData.push([]);
-    currentRow++;
+    // Headers
+    wsData.push(['Contenedor', 'Cant.', 'Bultos', 'Peso', 'Descripción', '', 'Pallet ID']);
 
-    const containerStyle = {
-      fill: { fgColor: { rgb: "1A1A1A" } },
-      font: { bold: true, color: { rgb: "FFFFFF" }, sz: 11 },
-      border: { top: { style: "thin", color: { rgb: "000000" } }, bottom: { style: "thin", color: { rgb: "000000" } }, left: { style: "thin", color: { rgb: "000000" } }, right: { style: "thin", color: { rgb: "000000" } } },
+    // Data rows per container
+    containerGroups.forEach((group) => {
+      group.items.forEach(({ inventoryItem, pdfPallets, isSearched }) => {
+        const palletId = inventoryItem.numeroCliente || '';
+        const isHighlighted = isSearched || pdfPallets.length > 0;
+        const descripcion = inventoryItem.producto || palletId;
+        const bultos = inventoryItem.cantidad || (pdfPallets.length > 0 ? pdfPallets[0].cajas : 0);
+        const peso = inventoryItem.kilos || (pdfPallets.length > 0 ? pdfPallets[0].kilos : 0);
+
+        wsData.push([
+          group.contenedor,
+          1,
+          bultos,
+          peso,
+          descripcion,
+          '',
+          palletId
+        ]);
+      });
+      // Blank row separator between containers
+      wsData.push([]);
+    });
+
+    const ws = XLSX.utils.aoa_to_sheet(wsData);
+
+    // Merge title row A1:G1
+    ws['!merges'] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: 6 } }];
+
+    // Styles
+    const thinBorder = {
+      top: { style: "thin" as const, color: { rgb: "000000" } },
+      bottom: { style: "thin" as const, color: { rgb: "000000" } },
+      left: { style: "thin" as const, color: { rgb: "000000" } },
+      right: { style: "thin" as const, color: { rgb: "000000" } },
+    };
+    const titleStyle = {
+      font: { bold: true, sz: 14, color: { rgb: "000000" } },
+      alignment: { horizontal: "center" as const, vertical: "center" as const },
     };
     const headerStyle = {
       fill: { fgColor: { rgb: "E0E0E0" } },
       font: { bold: true, sz: 10 },
-      border: { top: { style: "thin", color: { rgb: "000000" } }, bottom: { style: "thin", color: { rgb: "000000" } }, left: { style: "thin", color: { rgb: "000000" } }, right: { style: "thin", color: { rgb: "000000" } } },
-      alignment: { horizontal: "center", vertical: "center" }
+      border: thinBorder,
+      alignment: { horizontal: "center" as const, vertical: "center" as const },
     };
-    const dataBorder = {
-      top: { style: "thin", color: { rgb: "CCCCCC" } }, bottom: { style: "thin", color: { rgb: "CCCCCC" } },
-      left: { style: "thin", color: { rgb: "CCCCCC" } }, right: { style: "thin", color: { rgb: "CCCCCC" } }
+    const normalStyle = {
+      border: thinBorder,
+      font: { sz: 10 },
+    };
+    const highlightedStyle = {
+      border: thinBorder,
+      font: { sz: 10, bold: true },
+      fill: { fgColor: { rgb: "FFFF00" } },
     };
 
-    containerGroups.forEach((group, groupIdx) => {
-      // Container header
-      wsData.push([`CONTENEDOR ${groupIdx + 1}: ${group.contenedor}`, '', '', '', '']);
-      currentRow++;
+    // Apply title style
+    if (ws['A1']) ws['A1'].s = titleStyle;
 
-      // Column headers
-      wsData.push(['No. Pallet', 'Producto', 'Cajas (PDF)', 'Kilos (PDF)', 'Kilos (Inv)']);
-      currentRow++;
-
-      // Items
-      group.items.forEach(({ inventoryItem, pdfPallets }) => {
-        pdfPallets.forEach(pallet => {
-          wsData.push([pallet.palletNumber, inventoryItem.producto, pallet.cajas, pallet.kilos, inventoryItem.kilos]);
-          currentRow++;
-        });
-      });
-
-      // Subtotal
-      wsData.push(['SUBTOTAL', `${group.items.length} pallets`, group.totalPdfCajas, `${group.totalPdfKilos.toFixed(2)} KG`, `${group.totalInvKilos.toFixed(2)} KG`]);
-      currentRow++;
-      wsData.push([]);
-      currentRow++;
+    // Apply header style (row 3)
+    const headerCols = ['A', 'B', 'C', 'D', 'E', 'F', 'G'];
+    headerCols.forEach(col => {
+      const cellRef = `${col}3`;
+      if (ws[cellRef]) ws[cellRef].s = headerStyle;
     });
 
-    // Grand total
-    const grandCajas = containerGroups.reduce((s, g) => s + g.totalPdfCajas, 0);
-    const grandKilosPdf = containerGroups.reduce((s, g) => s + g.totalPdfKilos, 0);
-    const grandKilosInv = containerGroups.reduce((s, g) => s + g.totalInvKilos, 0);
-    wsData.push(['RESUMEN TOTAL', `${containerGroups.length} Contenedores`, grandCajas, `${grandKilosPdf.toFixed(2)} KG`, `${grandKilosInv.toFixed(2)} KG`]);
-
-    const ws = XLSX.utils.aoa_to_sheet(wsData);
-    ws['!merges'] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: 4 } }];
-    ws['A1'].s = { font: { bold: true, sz: 14, color: { rgb: "1A1A1A" } }, alignment: { horizontal: "center", vertical: "center" } };
-
-    // Apply styles
-    let rowIdx = 0;
-    let groupCounter = 0;
+    // Apply data styles (starting from row 4)
+    let dataRow = 4;
     containerGroups.forEach((group) => {
-      // Container header row
-      const colKeys = ['A', 'B', 'C', 'D', 'E'];
-      colKeys.forEach(col => {
-        const cellRef = `${col}${rowIdx + 1}`;
-        if (ws[cellRef]) ws[cellRef].s = containerStyle;
-      });
-      rowIdx++;
-      // Column header row
-      colKeys.forEach(col => {
-        const cellRef = `${col}${rowIdx + 1}`;
-        if (ws[cellRef]) ws[cellRef].s = headerStyle;
-      });
-      rowIdx++;
-      // Data rows
-      group.items.forEach(({ pdfPallets }) => {
-        pdfPallets.forEach(() => {
-          colKeys.forEach(col => {
-            const cellRef = `${col}${rowIdx + 1}`;
-            if (!ws[cellRef]) ws[cellRef] = { t: 's', v: '' };
-            ws[cellRef].s = { border: dataBorder };
-          });
-          rowIdx++;
+      group.items.forEach(({ inventoryItem, pdfPallets, isSearched }) => {
+        const palletId = inventoryItem.numeroCliente || '';
+        const isHighlighted = isSearched || pdfPallets.length > 0;
+        const styleToApply = isHighlighted ? highlightedStyle : normalStyle;
+
+        headerCols.forEach(col => {
+          const cellRef = `${col}${dataRow}`;
+          if (!ws[cellRef]) ws[cellRef] = { t: 's', v: '' };
+          // Apply highlight only to G column (Pallet ID) for searched items
+          if (col === 'G' && isHighlighted) {
+            ws[cellRef].s = highlightedStyle;
+          } else {
+            ws[cellRef].s = normalStyle;
+          }
         });
+        dataRow++;
       });
-      // Subtotal row
-      colKeys.forEach(col => {
-        const cellRef = `${col}${rowIdx + 1}`;
-        if (ws[cellRef]) ws[cellRef].s = { ...dataBorder, font: { bold: true } };
-      });
-      rowIdx += 2; // subtotal + empty row
-      groupCounter++;
+      dataRow++; // blank separator row
     });
 
-    ws['!cols'] = [{ wch: 16 }, { wch: 35 }, { wch: 14 }, { wch: 16 }, { wch: 16 }];
-    XLSX.utils.book_append_sheet(wb, ws, "Planilla de Carga");
+    // --- Summary section ---
+    // Find last data row
+    const lastDataRow = dataRow - 1;
 
-    // Missing pallets
+    // RESUMEN TOTAL (SOLO BUSCADOS)
+    const totalSearchedPallets = results.foundItems.reduce((s, fi) => s + fi.pdfPallets.length, 0);
+    const totalSearchedCajas = results.foundItems.reduce((s, fi) => s + fi.pdfPallets.reduce((ps, p) => ps + p.cajas, 0), 0);
+    const totalSearchedKilos = results.foundItems.reduce((s, fi) => s + fi.pdfPallets.reduce((ps, p) => ps + p.kilos, 0), 0);
+
+    const summaryStartRow = lastDataRow + 2;
+    const eCol = `E${summaryStartRow}`;
+    if (!ws[eCol]) ws[eCol] = { t: 's', v: 'RESUMEN TOTAL (SOLO BUSCADOS)' };
+    ws[eCol].s = { font: { bold: true, sz: 11 } };
+
+    ws[`E${summaryStartRow + 1}`] = { t: 's', v: 'TOTAL PALLETS' };
+    ws[`F${summaryStartRow + 1}`] = { t: 's', v: 'CAJAS' };
+    ws[`G${summaryStartRow + 1}`] = { t: 's', v: 'KG' };
+    [ws[`E${summaryStartRow + 1}`], ws[`F${summaryStartRow + 1}`], ws[`G${summaryStartRow + 1}`]].forEach(c => {
+      c.s = { font: { bold: true, sz: 10 } };
+    });
+
+    ws[`E${summaryStartRow + 2}`] = { t: 'n', v: totalSearchedPallets };
+    ws[`F${summaryStartRow + 2}`] = { t: 'n', v: totalSearchedCajas };
+    ws[`G${summaryStartRow + 2}`] = { t: 'n', v: Math.round(totalSearchedKilos) };
+    [ws[`E${summaryStartRow + 2}`], ws[`F${summaryStartRow + 2}`], ws[`G${summaryStartRow + 2}`]].forEach(c => {
+      c.s = { font: { sz: 10 } };
+    });
+
+    // COTES DE INGRESO (UNICOS)
+    const cotesStartRow = summaryStartRow + 4;
+    if (!ws[`E${cotesStartRow}`]) ws[`E${cotesStartRow}`] = { t: 's', v: 'COTES DE INGRESO (UNICOS)' };
+    ws[`E${cotesStartRow}`].s = { font: { bold: true, sz: 11 } };
+
+    const sortedCotes = Array.from(coteSet).sort();
+    sortedCotes.forEach((cote, i) => {
+      const row = cotesStartRow + 1 + i;
+      if (!ws[`E${row}`]) ws[`E${row}`] = { t: 's', v: cote };
+      ws[`E${row}`].s = { font: { sz: 10 } };
+    });
+
+    // Column widths
+    ws['!cols'] = [
+      { wch: 20 }, // A: Contenedor
+      { wch: 6 },  // B: Cant.
+      { wch: 8 },  // C: Bultos
+      { wch: 8 },  // D: Peso
+      { wch: 55 }, // E: Descripción
+      { wch: 4 },  // F: empty
+      { wch: 12 }, // G: Pallet ID
+    ];
+
+    XLSX.utils.book_append_sheet(wb, ws, "Plan de Carga");
+
+    // Missing pallets sheet
     if (results.missingPallets.length > 0) {
-      const wsMissingData = [['Pallets No Encontrados en Inventario'], [''], ['Pallet', 'Cajas', 'Kilos']];
+      const wsMissingData: any[][] = [['Pallets No Encontrados en Inventario'], [''], ['Pallet', 'Cajas', 'Kilos']];
       results.missingPallets.forEach(p => wsMissingData.push([p.palletNumber, String(p.cajas), String(p.kilos)]));
       const wsMissing = XLSX.utils.aoa_to_sheet(wsMissingData);
       wsMissing['A1'].s = { font: { bold: true, sz: 12 } };
@@ -656,8 +770,11 @@ export default function PdfProcessor({ inventoryData = [] }: PdfProcessorProps) 
                                 <span className="text-xs font-mono uppercase tracking-widest text-neutral-900 font-medium">
                                   {group.contenedor}
                                 </span>
-                                <span className="px-2 py-0.5 bg-blue-100 text-blue-800 text-[10px] font-mono uppercase tracking-widest">
-                                  {group.items.length} pallet{group.items.length !== 1 ? 's' : ''}
+                                <span className="px-2 py-0.5 bg-yellow-200 text-amber-800 text-[10px] font-mono uppercase tracking-widest">
+                                  {group.items.filter(i => i.isSearched).reduce((s, i) => s + i.pdfPallets.length, 0)} buscado{group.items.filter(i => i.isSearched).reduce((s, i) => s + i.pdfPallets.length, 0) !== 1 ? 's' : ''}
+                                </span>
+                                <span className="px-2 py-0.5 bg-neutral-100 text-neutral-600 text-[10px] font-mono uppercase tracking-widest">
+                                  {group.items.length} total
                                 </span>
                               </div>
                               <div className="flex items-center gap-1 text-[10px] font-mono text-neutral-500 mt-1">
@@ -682,6 +799,7 @@ export default function PdfProcessor({ inventoryData = [] }: PdfProcessorProps) 
                             <table className="w-full text-left text-xs font-sans">
                               <thead className="bg-neutral-100/50 text-[10px] font-mono uppercase tracking-widest text-neutral-500">
                                 <tr>
+                                  <th className="p-3 w-8"></th>
                                   <th className="p-3">Pallet</th>
                                   <th className="p-3">Producto</th>
                                   <th className="p-3 text-right">Cajas</th>
@@ -690,22 +808,40 @@ export default function PdfProcessor({ inventoryData = [] }: PdfProcessorProps) 
                                 </tr>
                               </thead>
                               <tbody className="divide-y divide-neutral-100">
-                                {group.items.map(({ inventoryItem, pdfPallets }, idx) => (
-                                  pdfPallets.map((pallet, pIdx) => (
-                                    <tr key={`${idx}-${pIdx}`} className="hover:bg-yellow-50 transition-colors">
-                                      <td className="p-3 font-mono font-medium text-blue-700">{pallet.palletNumber}</td>
-                                      <td className="p-3">{inventoryItem.producto}</td>
-                                      <td className="p-3 text-right font-mono">{pallet.cajas}</td>
-                                      <td className="p-3 text-right font-mono">{pallet.kilos.toFixed(2)}</td>
-                                      <td className="p-3 text-right font-mono text-neutral-500">{inventoryItem.kilos}</td>
-                                    </tr>
-                                  ))
-                                ))}
+                                {group.items.map(({ inventoryItem, pdfPallets, isSearched }, idx) => {
+                                  if (isSearched && pdfPallets.length > 0) {
+                                    return pdfPallets.map((pallet, pIdx) => (
+                                      <tr key={`${idx}-${pIdx}`} className="bg-yellow-50 hover:bg-yellow-100 transition-colors">
+                                        <td className="p-3 text-center">
+                                          <span className="inline-block w-2 h-2 rounded-full bg-yellow-400"></span>
+                                        </td>
+                                        <td className="p-3 font-mono font-semibold text-amber-800">{pallet.palletNumber}</td>
+                                        <td className="p-3">{inventoryItem.producto}</td>
+                                        <td className="p-3 text-right font-mono font-semibold text-amber-800">{pallet.cajas}</td>
+                                        <td className="p-3 text-right font-mono font-semibold text-amber-800">{pallet.kilos.toFixed(2)}</td>
+                                        <td className="p-3 text-right font-mono text-neutral-500">{inventoryItem.kilos}</td>
+                                      </tr>
+                                    ));
+                                  } else {
+                                    return (
+                                      <tr key={`${idx}-inv`} className="hover:bg-neutral-50 transition-colors opacity-60">
+                                        <td className="p-3 text-center">
+                                          <span className="inline-block w-2 h-2 rounded-full bg-neutral-300"></span>
+                                        </td>
+                                        <td className="p-3 font-mono text-neutral-500">{inventoryItem.numeroCliente}</td>
+                                        <td className="p-3 text-neutral-500">{inventoryItem.producto}</td>
+                                        <td className="p-3 text-right font-mono text-neutral-500">{inventoryItem.cantidad}</td>
+                                        <td className="p-3 text-right font-mono text-neutral-400">-</td>
+                                        <td className="p-3 text-right font-mono text-neutral-500">{inventoryItem.kilos}</td>
+                                      </tr>
+                                    );
+                                  }
+                                })}
                               </tbody>
                               <tfoot>
                                 <tr className="bg-neutral-50 border-t-2 border-neutral-300">
-                                  <td className="p-3 font-mono uppercase tracking-widest text-[10px] text-neutral-600 font-medium" colSpan={2}>
-                                    Subtotal ({group.items.length} pallets)
+                                  <td className="p-3 font-mono uppercase tracking-widest text-[10px] text-neutral-600 font-medium" colSpan={3}>
+                                    Subtotal ({group.items.filter(i => i.isSearched).reduce((s, i) => s + i.pdfPallets.length, 0)} buscados / {group.items.length} total)
                                   </td>
                                   <td className="p-3 text-right font-mono font-medium">{group.totalPdfCajas}</td>
                                   <td className="p-3 text-right font-mono font-medium">{group.totalPdfKilos.toFixed(2)}</td>
