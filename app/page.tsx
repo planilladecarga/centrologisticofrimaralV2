@@ -233,6 +233,7 @@ export default function LogisticsDashboard() {
             const contenedorVal = colContenedor !== -1 ? String(row[colContenedor] || '').trim() : '';
             const loteVal = colLote !== -1 ? String(row[colLote] || '').trim() : '';
             mappedData.push({
+              id: crypto.randomUUID(),
               cliente: currentClienteName,
               numeroCliente: String(currentClienteNum).replace(/\./g, ''),
               producto: String(producto).trim(),

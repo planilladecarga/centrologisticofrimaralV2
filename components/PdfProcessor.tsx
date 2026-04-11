@@ -81,7 +81,11 @@ export default function PdfProcessor({ inventoryData = [] }: PdfProcessorProps) 
       if (groupMap.has(key)) {
         const group = groupMap.get(key)!;
         // Check if we already have this exact item
-        const existing = group.items.find(ei => (ei.inventoryItem.id || '') === (item.id || ''));
+        const itemKey = item.id || `${item.numeroCliente}|${item.producto}|${item.contenedor}`;
+        const existing = group.items.find(ei => {
+          const eiKey = ei.inventoryItem.id || `${ei.inventoryItem.numeroCliente}|${ei.inventoryItem.producto}|${ei.inventoryItem.contenedor}`;
+          return eiKey === itemKey;
+        });
         if (existing) {
           existing.pdfPallets.push(...pdfs);
         } else {
@@ -287,8 +291,11 @@ export default function PdfProcessor({ inventoryData = [] }: PdfProcessorProps) 
         );
 
         if (isMatch) {
-          const key = invItem.id || `${invItem.numeroCliente}-${invItem.producto}`;
-          const existing = foundItems.find(f => (f.item.id || '') === (invItem.id || ''));
+          const matchKey = invItem.id || `${invItem.numeroCliente}|${invItem.producto}|${invItem.contenedor}`;
+          const existing = foundItems.find(f => {
+            const fKey = f.item.id || `${f.item.numeroCliente}|${f.item.producto}|${f.item.contenedor}`;
+            return fKey === matchKey;
+          });
           if (existing) {
             if (!existing.pdfPallets.some(p => p.palletNumber === pallet.palletNumber)) {
               existing.pdfPallets.push(pallet);
@@ -296,7 +303,7 @@ export default function PdfProcessor({ inventoryData = [] }: PdfProcessorProps) 
           } else {
             foundItems.push({ item: invItem, pdfPallets: [pallet] });
           }
-          foundInventoryKeys.add(key);
+          foundInventoryKeys.add(matchKey);
           matched = true;
           break;
         }
