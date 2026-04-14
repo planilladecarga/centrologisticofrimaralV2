@@ -45,12 +45,18 @@ interface ContainerGroup {
   totalInvKilos: number;
 }
 
+type ProcessorNotice = {
+  type: 'success' | 'error' | 'info';
+  text: string;
+};
+
 export default function PdfProcessor({ inventoryData = [] }: PdfProcessorProps) {
   const [pdfPallets, setPdfPallets] = useState<PalletFromPdf[]>([]);
   const [manualIds, setManualIds] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   const [fileName, setFileName] = useState('');
+  const [notice, setNotice] = useState<ProcessorNotice | null>(null);
 
   const [results, setResults] = useState<{
     foundItems: { item: InventoryItem; pdfPallets: PalletFromPdf[] }[];
@@ -61,15 +67,41 @@ export default function PdfProcessor({ inventoryData = [] }: PdfProcessorProps) 
 
   useEffect(() => {
     if (typeof window !== 'undefined' && !window.pdfjsLib) {
+      const existingScript = document.querySelector<HTMLScriptElement>('script[data-pdfjs-cdn="true"]');
+
+      if (existingScript) {
+        if (window.pdfjsLib) {
+          window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+          return;
+        }
+
+        const onLoad = () => {
+          if (window.pdfjsLib) {
+            window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+          }
+        };
+        existingScript.addEventListener('load', onLoad);
+        return () => existingScript.removeEventListener('load', onLoad);
+      }
+
       const script = document.createElement('script');
       script.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
       script.async = true;
+      script.dataset.pdfjsCdn = 'true';
       script.onload = () => {
-        window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+        if (window.pdfjsLib) {
+          window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+        }
       };
       document.body.appendChild(script);
     }
   }, []);
+
+  useEffect(() => {
+    if (!notice) return;
+    const timer = setTimeout(() => setNotice(null), 4000);
+    return () => clearTimeout(timer);
+  }, [notice]);
 
   // Group found items by container (contenedor)
   const containerGroups = useMemo<ContainerGroup[]>(() => {
@@ -198,7 +230,6 @@ export default function PdfProcessor({ inventoryData = [] }: PdfProcessorProps) 
     let match;
     while ((match = palletRegex.exec(text)) !== null) {
       const num = match[1];
-      const parsedNum = parseInt(num);
       // Skip years (2000-2099 have only 4 digits, so 6-digit numbers won't match)
       allNumbers.push({ num, index: match.index });
     }
@@ -214,14 +245,11 @@ export default function PdfProcessor({ inventoryData = [] }: PdfProcessorProps) 
       const numberPattern = /(\d+[\.,]?\d*)/g;
       const followingNumbers: number[] = [];
       let numMatch;
-      let searchOffset = 0;
-
       while ((numMatch = numberPattern.exec(afterText)) !== null && followingNumbers.length < 2) {
         const val = parseFloat(numMatch[1].replace(',', '.'));
         if (!isNaN(val) && val > 0 && val < 100000) {
           followingNumbers.push(val);
         }
-        searchOffset = numMatch.index + numMatch[0].length;
       }
 
       if (followingNumbers.length >= 2) {
@@ -255,17 +283,23 @@ export default function PdfProcessor({ inventoryData = [] }: PdfProcessorProps) 
     setFileName(file.name);
     try {
       const text = await extractPage2FromPdf(file);
-      console.log('PDF Page 2 text:', text.substring(0, 2000));
       const parsed = parsePalletsFromText(text);
-      console.log('Parsed pallets:', parsed);
       setPdfPallets(parsed);
 
       if (parsed.length === 0) {
-        alert("No se encontraron pallets en la segunda hoja del PDF. Verifica que el formato sea: Número de Pallet, Cajas, Kilos.");
+        setNotice({
+          type: 'info',
+          text: 'No se encontraron pallets en la segunda hoja del PDF. Verifica que el formato sea: Número de Pallet, Cajas, Kilos.'
+        });
+      } else {
+        setNotice({
+          type: 'success',
+          text: `PDF procesado correctamente: ${parsed.length} pallet(s) detectado(s).`
+        });
       }
     } catch (error: any) {
       console.error("Error processing PDF:", error);
-      alert(error.message || "Error al procesar el archivo PDF.");
+      setNotice({ type: 'error', text: error.message || "Error al procesar el archivo PDF." });
     } finally {
       setIsProcessing(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
@@ -288,12 +322,12 @@ export default function PdfProcessor({ inventoryData = [] }: PdfProcessorProps) 
     });
 
     if (allPallets.length === 0) {
-      alert("No hay pallets para buscar. Carga un PDF o ingresa números manualmente.");
+      setNotice({ type: 'error', text: "No hay pallets para buscar. Carga un PDF o ingresa números manualmente." });
       return;
     }
 
     if (inventoryData.length === 0) {
-      alert("No hay datos de inventario. Carga el inventario primero en la sección 'Inventario'.");
+      setNotice({ type: 'error', text: "No hay datos de inventario. Carga el inventario primero en la sección 'Inventario'." });
       return;
     }
 
@@ -354,6 +388,10 @@ export default function PdfProcessor({ inventoryData = [] }: PdfProcessorProps) 
     });
 
     setResults({ foundItems, missingPallets });
+    setNotice({
+      type: 'success',
+      text: `Búsqueda finalizada: ${foundItems.length} coincidencia(s), ${missingPallets.length} pallet(s) sin match.`
+    });
 
     // Auto-expand all groups
     if (foundItems.length > 0) {
@@ -579,6 +617,18 @@ export default function PdfProcessor({ inventoryData = [] }: PdfProcessorProps) 
         {inventoryData.length === 0 && (
           <div className="border border-amber-200 bg-amber-50 p-4 text-xs font-mono text-amber-800 uppercase tracking-widest">
             ⚠ No hay inventario cargado. Ve a la sección &quot;02. Inventario&quot; y carga un archivo Excel primero.
+          </div>
+        )}
+
+        {notice && (
+          <div className={`border p-3 text-xs font-mono uppercase tracking-widest ${
+            notice.type === 'success'
+              ? 'border-green-200 bg-green-50 text-green-800'
+              : notice.type === 'error'
+                ? 'border-red-200 bg-red-50 text-red-800'
+                : 'border-blue-200 bg-blue-50 text-blue-800'
+          }`}>
+            {notice.text}
           </div>
         )}
 
