@@ -5,6 +5,7 @@ import dynamic from 'next/dynamic';
 
 const PdfProcessor = dynamic(() => import('../components/PdfProcessor'), { ssr: false });
 const TemperatureMonitor = dynamic(() => import('../components/TemperatureMonitor'), { ssr: false });
+const Pedidos = dynamic(() => import('../components/Pedidos'), { ssr: false });
 
 interface ActivityRecord {
   id?: string;
@@ -359,8 +360,9 @@ export default function LogisticsDashboard() {
           {[
             { key: 'dashboard', label: '01. Panel Principal' },
             { key: 'inventory', label: '02. Inventario' },
-            { key: 'despachos', label: '03. Despachos' },
-            { key: 'configuracion', label: '05. Configuración' },
+            { key: 'pedidos', label: '03. Pedidos' },
+            { key: 'despachos', label: '04. Despachos' },
+            { key: 'configuracion', label: '06. Configuración' },
           ].map(tab => (
             <button key={tab.key}
               onClick={() => setActiveTab(tab.key)}
@@ -650,6 +652,13 @@ export default function LogisticsDashboard() {
                 })}
               </div>
             )}
+          </div>
+        )}
+
+        {/* ===== PEDIDOS ===== */}
+        {activeTab === 'pedidos' && (
+          <div className="flex-1 overflow-hidden flex flex-col">
+            <Pedidos inventoryData={inventoryData} />
           </div>
         )}
 
