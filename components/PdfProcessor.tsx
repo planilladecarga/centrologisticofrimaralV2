@@ -70,18 +70,12 @@ export default function PdfProcessor({ inventoryData = [] }: PdfProcessorProps) 
       const existingScript = document.querySelector<HTMLScriptElement>('script[data-pdfjs-cdn="true"]');
 
       if (existingScript) {
-        if (window.pdfjsLib) {
-          window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
-          return;
-        }
-
-        const onLoad = () => {
+        existingScript.addEventListener('load', () => {
           if (window.pdfjsLib) {
             window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
           }
-        };
-        existingScript.addEventListener('load', onLoad);
-        return () => existingScript.removeEventListener('load', onLoad);
+        });
+        return;
       }
 
       const script = document.createElement('script');
