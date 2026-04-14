@@ -18,6 +18,8 @@ interface CartItem {
   kilosPerPallet: number;
   palletsRequested: number;
   maxPallets: number;
+  originalCajas: number;
+  originalKilos: number;
   observaciones: string;
 }
 
@@ -403,8 +405,8 @@ export default function Pedidos({ inventoryData, onUpdateInventory }: PedidosPro
 
   const cartTotals = useMemo(() => cart.reduce((acc, item) => ({
     pallets: acc.pallets + item.palletsRequested,
-    cajas: acc.cajas + Math.round(item.cajasPerPallet * item.palletsRequested),
-    kilos: acc.kilos + Math.round(item.kilosPerPallet * item.palletsRequested * 10) / 10,
+    cajas: acc.cajas + Math.round(item.originalCajas * item.palletsRequested / item.maxPallets),
+    kilos: acc.kilos + Math.round(item.originalKilos * item.palletsRequested / item.maxPallets * 10) / 10,
   }), { pallets: 0, cajas: 0, kilos: 0 }), [cart]);
 
   const filteredOrders = useMemo(() => {
@@ -485,7 +487,9 @@ export default function Pedidos({ inventoryData, onUpdateInventory }: PedidosPro
         contenedor: invItem.contenedor || '', lote: invItem.lote || '',
         cajasPerPallet: invItem.pallets > 0 ? Math.round(invItem.cantidad / invItem.pallets) : invItem.cantidad,
         kilosPerPallet: invItem.pallets > 0 ? Math.round(invItem.kilos / invItem.pallets * 10) / 10 : invItem.kilos,
-        palletsRequested: 1, maxPallets: invItem.pallets, observaciones: '',
+        palletsRequested: 1, maxPallets: invItem.pallets,
+        originalCajas: invItem.cantidad, originalKilos: invItem.kilos,
+        observaciones: '',
       }]);
     }
   };
@@ -543,8 +547,8 @@ export default function Pedidos({ inventoryData, onUpdateInventory }: PedidosPro
       items: cart.map(c => ({
         id: crypto.randomUUID(), numeroCliente: c.numeroCliente,
         producto: c.producto, contenedor: c.contenedor, lote: c.lote,
-        cajas: Math.round(c.cajasPerPallet * c.palletsRequested),
-        kilos: Math.round(c.kilosPerPallet * c.palletsRequested * 10) / 10,
+        cajas: Math.round(c.originalCajas * c.palletsRequested / c.maxPallets),
+        kilos: Math.round(c.originalKilos * c.palletsRequested / c.maxPallets * 10) / 10,
         palletsRequested: c.palletsRequested,
         observaciones: c.observaciones.trim().toUpperCase(),
       })),
@@ -589,7 +593,7 @@ export default function Pedidos({ inventoryData, onUpdateInventory }: PedidosPro
     containers.forEach(cont => {
       order.items.filter(i => i.contenedor === cont).forEach(item => {
         hlRows.add(wsData.length);
-        wsData.push([cont, item.palletsRequested, item.cajas, item.kilos, item.producto, '', item.numeroCliente]);
+        wsData.push([cont, item.palletsRequested, item.cajas, item.kilos, item.producto, '', item.lote || item.numeroCliente]);
       });
       wsData.push([]);
     });
@@ -963,7 +967,7 @@ export default function Pedidos({ inventoryData, onUpdateInventory }: PedidosPro
                               <div className="flex-1 min-w-0">
                                 <p className="text-xs font-mono font-medium text-neutral-900 truncate">{ci.producto}</p>
                                 <p className="text-[10px] font-mono text-neutral-500">
-                                  PAL: {ci.numeroCliente} · {Math.round(ci.cajasPerPallet * ci.palletsRequested)} CAJ · {Math.round(ci.kilosPerPallet * ci.palletsRequested * 10) / 10} KG
+                                  PAL: {ci.lote || ci.numeroCliente} · {Math.round(ci.originalCajas * ci.palletsRequested / ci.maxPallets)} CAJ · {Math.round(ci.originalKilos * ci.palletsRequested / ci.maxPallets * 10) / 10} KG
                                 </p>
                               </div>
                               <div className="flex items-center gap-1 shrink-0">
@@ -1126,7 +1130,7 @@ export default function Pedidos({ inventoryData, onUpdateInventory }: PedidosPro
                                       <td className="p-3 text-center">
                                         <span className={`inline-block w-2 h-2 rounded-full ${isOrdered ? 'bg-yellow-400' : 'bg-neutral-300'}`}></span>
                                       </td>
-                                      <td className="p-3 font-mono font-semibold text-amber-800">{inventoryItem.numeroCliente}</td>
+                                      <td className="p-3 font-mono font-semibold text-amber-800">{inventoryItem.lote || inventoryItem.numeroCliente}</td>
                                       <td className="p-3">{inventoryItem.producto}</td>
                                       <td className="p-3 text-right font-mono font-semibold text-amber-800">{orderItem?.palletsRequested || '-'}</td>
                                       <td className="p-3 text-right font-mono">{isOrdered ? orderItem?.cajas : inventoryItem.cantidad}</td>
