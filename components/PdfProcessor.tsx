@@ -61,11 +61,25 @@ export default function PdfProcessor({ inventoryData = [] }: PdfProcessorProps) 
 
   useEffect(() => {
     if (typeof window !== 'undefined' && !window.pdfjsLib) {
+      const existingScript = document.querySelector<HTMLScriptElement>('script[data-pdfjs-cdn="true"]');
+
+      if (existingScript) {
+        existingScript.addEventListener('load', () => {
+          if (window.pdfjsLib) {
+            window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+          }
+        });
+        return;
+      }
+
       const script = document.createElement('script');
       script.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
       script.async = true;
+      script.dataset.pdfjsCdn = 'true';
       script.onload = () => {
-        window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+        if (window.pdfjsLib) {
+          window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+        }
       };
       document.body.appendChild(script);
     }
@@ -198,7 +212,6 @@ export default function PdfProcessor({ inventoryData = [] }: PdfProcessorProps) 
     let match;
     while ((match = palletRegex.exec(text)) !== null) {
       const num = match[1];
-      const parsedNum = parseInt(num);
       // Skip years (2000-2099 have only 4 digits, so 6-digit numbers won't match)
       allNumbers.push({ num, index: match.index });
     }
@@ -214,14 +227,11 @@ export default function PdfProcessor({ inventoryData = [] }: PdfProcessorProps) 
       const numberPattern = /(\d+[\.,]?\d*)/g;
       const followingNumbers: number[] = [];
       let numMatch;
-      let searchOffset = 0;
-
       while ((numMatch = numberPattern.exec(afterText)) !== null && followingNumbers.length < 2) {
         const val = parseFloat(numMatch[1].replace(',', '.'));
         if (!isNaN(val) && val > 0 && val < 100000) {
           followingNumbers.push(val);
         }
-        searchOffset = numMatch.index + numMatch[0].length;
       }
 
       if (followingNumbers.length >= 2) {
