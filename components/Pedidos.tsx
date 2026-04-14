@@ -70,7 +70,7 @@ const statusConfig: Record<string, { label: string; color: string; next?: string
   'DESPACHADO': { label: 'Despachado', color: 'bg-neutral-100 text-neutral-600 border-neutral-300' },
 };
 
-// ===== Reusable Searchable Dropdown Component =====
+// Pedidos v2 - Gestión de pedidos con carrito y estados
 function SearchableDropdown({
   label,
   placeholder,
@@ -414,7 +414,7 @@ export default function Pedidos({ inventoryData, onUpdateInventory }: PedidosPro
 
   const todayOrders = useMemo(() => {
     const today = new Date().toISOString().split('T')[0];
-    return orders.filter(o => o.createdAt.startsWith(today));
+    return orders.filter(o => o.createdAt && o.createdAt.startsWith(today));
   }, [orders]);
 
   const selectedOrder = useMemo(() =>
@@ -465,7 +465,7 @@ export default function Pedidos({ inventoryData, onUpdateInventory }: PedidosPro
 
   const generateOrderNumber = () => {
     const today = new Date().toISOString().split('T')[0].replace(/-/g, '');
-    const todayCount = orders.filter(o => o.createdAt.startsWith(today)).length;
+    const todayCount = orders.filter(o => o.createdAt && o.createdAt.startsWith(today)).length;
     return `PED-${today}-${String(todayCount + 1).padStart(3, '0')}`;
   };
 
