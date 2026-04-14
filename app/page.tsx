@@ -107,9 +107,9 @@ export default function LogisticsDashboard() {
     try {
       const ordersRaw = typeof window !== 'undefined' ? JSON.parse(localStorage.getItem('frimaral_orders_cache_v1') || '[]') : [];
       const today = new Date().toISOString().split('T')[0];
-      ordersTodayCount = ordersRaw.filter((o: any) => o.createdAt.startsWith(today)).length;
+      ordersTodayCount = ordersRaw.filter((o: any) => o.createdAt && o.createdAt.startsWith(today)).length;
       ordersPending = ordersRaw.filter((o: any) => o.estado === 'PENDIENTE').length;
-      ordersDispatched = ordersRaw.filter((o: any) => o.estado === 'DESPACHADO' && o.updatedAt.startsWith(today)).length;
+      ordersDispatched = ordersRaw.filter((o: any) => o.estado === 'DESPACHADO' && o.updatedAt && o.updatedAt.startsWith(today)).length;
     } catch {}
 
     return {

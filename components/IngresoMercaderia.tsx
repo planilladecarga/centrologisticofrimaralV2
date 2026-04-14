@@ -213,14 +213,19 @@ export default function IngresoMercaderia({ inventoryData, onUpdateInventory }: 
 
   // Dropdown options from existing inventory
   const clientOptions = useMemo(() => {
-    const map = new Map<string, number>();
+    const map = new Map<string, { name: string; num: string; count: number }>();
     inventoryData.forEach(item => {
       const cli = (item.cliente || '').trim();
+      const num = (item.numeroCliente || '').replace(/\./g, '').trim();
       if (!cli) return;
-      map.set(cli, (map.get(cli) || 0) + 1);
+      const key = `${cli}|||${num}`;
+      if (!map.has(key)) map.set(key, { name: cli, num, count: 0 });
+      map.get(key)!.count++;
     });
-    return Array.from(map.entries()).sort((a, b) => a[0].localeCompare(b[0])).map(([name, count]) => ({
-      value: name, display: name, sub: `${count} item${count !== 1 ? 's' : ''}`,
+    return Array.from(map.entries()).sort((a, b) => a[1].name.localeCompare(b[1].name)).map(([, info]) => ({
+      value: `${info.name}|||${info.num}`,
+      display: `${info.name} (${info.num})`,
+      sub: `${info.count} item${info.count !== 1 ? 's' : ''}`,
     }));
   }, [inventoryData]);
 
@@ -287,11 +292,16 @@ export default function IngresoMercaderia({ inventoryData, onUpdateInventory }: 
       return;
     }
 
+    // Helper: extract client name from "NAME|||NUM" or return as-is
+    const getClientName = (raw: string) => (raw.includes('|||') ? raw.split('|||')[0] : raw).trim();
+    const getClientNum = (raw: string) => raw.includes('|||') ? raw.split('|||')[1] || '' : '';
+
     // Build new inventory items and add/merge
     const updated = [...inventoryData];
     validLines.forEach(line => {
+      const cliName = getClientName(line.cliente);
       const existingIdx = updated.findIndex(item =>
-        (item.cliente || '').trim() === line.cliente.trim() &&
+        (item.cliente || '').trim() === cliName &&
         (item.producto || '').trim() === line.producto.trim() &&
         (item.contenedor || '').trim() === line.contenedor.trim() &&
         (item.lote || '').trim() === line.lote.trim()
@@ -312,8 +322,8 @@ export default function IngresoMercaderia({ inventoryData, onUpdateInventory }: 
       } else {
         updated.push({
           id: crypto.randomUUID(),
-          cliente: line.cliente.trim().toUpperCase(),
-          numeroCliente: line.lote.trim() || '-',
+          cliente: cliName.toUpperCase(),
+          numeroCliente: getClientNum(line.cliente) || line.lote.trim() || '-',
           producto: line.producto.trim().toUpperCase(),
           contenedor: line.contenedor.trim().toUpperCase(),
           lote: line.lote.trim().toUpperCase(),
