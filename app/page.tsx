@@ -34,6 +34,8 @@ export default function LogisticsDashboard() {
   const [searchTerm, setSearchTerm] = useState<string>('');
   const [activityRecords, setActivityRecords] = useState<ActivityRecord[]>([]);
   const [isSavingRecord, setIsSavingRecord] = useState(false);
+  const [expandedKpi, setExpandedKpi] = useState<string | null>(null);
+  const [activityFilter, setActivityFilter] = useState<string>('TODOS');
 
   // New record form state
   const [newRecord, setNewRecord] = useState({
@@ -156,6 +158,92 @@ export default function LogisticsDashboard() {
       .map(e => ({ ...e, containersArr: Array.from(e.containers).sort() }))
       .sort((a, b) => b.kilos - a.kilos);
   }, [inventoryData]);
+
+  // Dashboard orders from localStorage
+  const dashboardOrders = useMemo(() => {
+    try {
+      const raw = typeof window !== 'undefined' ? JSON.parse(localStorage.getItem('frimaral_orders_cache_v1') || '[]') : [];
+      return raw;
+    } catch { return []; }
+  }, []);
+
+  const ordersToday = useMemo(() => {
+    const today = new Date().toISOString().split('T')[0];
+    return dashboardOrders.filter((o: any) => o.createdAt && o.createdAt.startsWith(today)).sort((a: any, b: any) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+  }, [dashboardOrders]);
+
+  const ordersPending = useMemo(() => {
+    return dashboardOrders.filter((o: any) => o.estado === 'PENDIENTE').sort((a: any, b: any) => (a.createdAt || '').localeCompare(b.createdAt || ''));
+  }, [dashboardOrders]);
+
+  const ordersDispatched = useMemo(() => {
+    const today = new Date().toISOString().split('T')[0];
+    return dashboardOrders.filter((o: any) => o.estado === 'DESPACHADO' && o.updatedAt && o.updatedAt.startsWith(today)).sort((a: any, b: any) => (b.updatedAt || '').localeCompare(a.updatedAt || '')).slice(0, 10);
+  }, [dashboardOrders]);
+
+  // Last 8 orders sorted by createdAt desc
+  const recentOrders = useMemo(() => {
+    return [...dashboardOrders].sort((a: any, b: any) => (b.createdAt || '').localeCompare(a.createdAt || '')).slice(0, 8);
+  }, [dashboardOrders]);
+
+  // Ingreso history from localStorage
+  const ingresoHistory = useMemo(() => {
+    try {
+      const raw = typeof window !== 'undefined' ? JSON.parse(localStorage.getItem('frimaral_ingreso_history_v1') || '[]') : [];
+      return raw;
+    } catch { return []; }
+  }, []);
+
+  const recentIngresos = useMemo(() => {
+    return [...ingresoHistory].sort((a: any, b: any) => (b.fecha || '').localeCompare(a.fecha || '')).slice(0, 5);
+  }, [ingresoHistory]);
+
+  // Client container details for improved breakdown
+  const clientContainerDetails = useMemo(() => {
+    const map = new Map<string, Map<string, { products: Set<string>; pallets: number; cajas: number; kilos: number }>>();
+    inventoryData.forEach(item => {
+      const cli = (item.cliente || '-').trim();
+      const cont = (item.contenedor || '').trim();
+      if (!cont) return;
+      if (!map.has(cli)) map.set(cli, new Map());
+      const contMap = map.get(cli)!;
+      if (!contMap.has(cont)) contMap.set(cont, { products: new Set(), pallets: 0, cajas: 0, kilos: 0 });
+      const entry = contMap.get(cont)!;
+      if (item.producto) entry.products.add(String(item.producto).trim());
+      entry.pallets += Number(item.pallets) || 0;
+      entry.cajas += Number(item.cantidad) || 0;
+      entry.kilos += Number(item.kilos) || 0;
+    });
+    return map;
+  }, [inventoryData]);
+
+  // Dashboard alerts
+  const dashboardAlerts = useMemo(() => {
+    const alerts: { type: 'amber' | 'red'; message: string }[] = [];
+    // Pending orders older than 24 hours
+    const now = Date.now();
+    const oldPending = dashboardOrders.filter((o: any) => {
+      if (o.estado !== 'PENDIENTE' || !o.createdAt) return false;
+      return (now - new Date(o.createdAt).getTime()) > 24 * 60 * 60 * 1000;
+    });
+    if (oldPending.length > 0) {
+      alerts.push({ type: 'amber', message: `${oldPending.length} pedido${oldPending.length > 1 ? 's' : ''} pendiente${oldPending.length > 1 ? 's' : ''} con más de 24 horas sin atender` });
+    }
+    // Inventory above 80% capacity
+    if (Number(kpis.occupiedPercent) > 80) {
+      alerts.push({ type: 'red', message: `Capacidad de cámara al ${kpis.occupiedPercent}% — riesgo de saturación` });
+    }
+    return alerts;
+  }, [dashboardOrders, kpis.occupiedPercent]);
+
+  // Recently dispatched orders for activity log (last 3 days)
+  const dispatchedOrdersRecent = useMemo(() => {
+    const threeDaysAgo = new Date();
+    threeDaysAgo.setDate(threeDaysAgo.getDate() - 3);
+    return dashboardOrders
+      .filter((o: any) => o.estado === 'DESPACHADO' && o.updatedAt && new Date(o.updatedAt) >= threeDaysAgo)
+      .sort((a: any, b: any) => (b.updatedAt || '').localeCompare(a.updatedAt || ''));
+  }, [dashboardOrders]);
 
   const handleSaveRecord = async () => {
     if (!newRecord.guiaId.trim()) {
@@ -540,30 +628,153 @@ export default function LogisticsDashboard() {
               </div>
             </div>
 
-            {/* Orders KPIs */}
+            {/* Orders KPIs - Clickable */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-px bg-neutral-200 border border-neutral-200 mb-8">
-              <div className="bg-amber-50 p-5">
+              <button onClick={() => setExpandedKpi(expandedKpi === 'today' ? null : 'today')} className="bg-amber-50 p-5 text-left hover:bg-amber-100 transition-colors">
                 <p className="text-xs font-mono uppercase tracking-widest text-neutral-500 mb-3">Pedidos Hoy</p>
                 <h3 className="text-3xl font-light tracking-tighter text-neutral-900">{kpis.ordersToday}</h3>
                 <div className="mt-4 text-xs font-mono text-neutral-500 uppercase tracking-widest border-t border-neutral-100 pt-3">
-                  Creados en el día
+                  Creados en el día {expandedKpi === 'today' ? '▾' : '▸'}
                 </div>
-              </div>
-              <div className="bg-blue-50 p-5">
+              </button>
+              <button onClick={() => setExpandedKpi(expandedKpi === 'pending' ? null : 'pending')} className="bg-blue-50 p-5 text-left hover:bg-blue-100 transition-colors">
                 <p className="text-xs font-mono uppercase tracking-widest text-neutral-500 mb-3">Pendientes</p>
                 <h3 className="text-3xl font-light tracking-tighter text-neutral-900">{kpis.ordersPending}</h3>
                 <div className="mt-4 text-xs font-mono text-neutral-500 uppercase tracking-widest border-t border-neutral-100 pt-3">
-                  Esperando preparación
+                  Esperando preparación {expandedKpi === 'pending' ? '▾' : '▸'}
                 </div>
-              </div>
-              <div className="bg-green-50 p-5">
+              </button>
+              <button onClick={() => setExpandedKpi(expandedKpi === 'dispatched' ? null : 'dispatched')} className="bg-green-50 p-5 text-left hover:bg-green-100 transition-colors">
                 <p className="text-xs font-mono uppercase tracking-widest text-neutral-500 mb-3">Despachados Hoy</p>
                 <h3 className="text-3xl font-light tracking-tighter text-neutral-900">{kpis.ordersDispatched}</h3>
                 <div className="mt-4 text-xs font-mono text-neutral-500 uppercase tracking-widest border-t border-neutral-100 pt-3">
-                  Completados
+                  Completados {expandedKpi === 'dispatched' ? '▾' : '▸'}
+                </div>
+              </button>
+            </div>
+
+            {/* KPI Expanded List */}
+            {expandedKpi && (
+              <div className="border border-neutral-200 bg-white mb-8 overflow-hidden">
+                <div className="grid grid-cols-5 border-b border-neutral-200 bg-neutral-50 p-3 text-[10px] font-mono uppercase tracking-widest text-neutral-500">
+                  <div>N° Pedido</div>
+                  <div>Cliente</div>
+                  <div>Pallets / Cajas / Kg</div>
+                  <div>Estado</div>
+                  <div className="text-right">Fecha</div>
+                </div>
+                <div className="divide-y divide-neutral-100 max-h-64 overflow-auto">
+                  {(expandedKpi === 'today' ? ordersToday : expandedKpi === 'pending' ? ordersPending : ordersDispatched).length === 0 ? (
+                    <div className="p-6 text-center text-xs font-mono text-neutral-400 uppercase tracking-widest">
+                      Sin pedidos para mostrar
+                    </div>
+                  ) : (
+                    (expandedKpi === 'today' ? ordersToday : expandedKpi === 'pending' ? ordersPending : ordersDispatched).map((order: any) => {
+                      const totalPallets = (order.items || []).reduce((s: number, i: any) => s + (Number(i.palletsRequested) || 0), 0);
+                      const totalCajas = (order.items || []).reduce((s: number, i: any) => s + (Number(i.cajas) || 0), 0);
+                      const totalKilos = (order.items || []).reduce((s: number, i: any) => s + (Number(i.kilos) || 0), 0);
+                      return (
+                        <div key={order.id} className="grid grid-cols-5 p-3 text-xs font-mono text-neutral-900 hover:bg-neutral-50 transition-colors">
+                          <div className="font-medium">{order.orderNumber || '-'}</div>
+                          <div className="truncate">{order.cliente || '-'}</div>
+                          <div className="text-neutral-600 text-[11px]">
+                            {totalPallets} PAL / {totalCajas} CAJ / {totalKilos.toFixed(0)} KG
+                          </div>
+                          <div>
+                            <span className={`px-2 py-0.5 text-[9px] ${
+                              order.estado === 'PENDIENTE' ? 'bg-amber-100 text-amber-800' :
+                              order.estado === 'EN PREPARACIÓN' ? 'bg-blue-100 text-blue-800' :
+                              order.estado === 'LISTO' ? 'bg-purple-100 text-purple-800' :
+                              order.estado === 'DESPACHADO' ? 'bg-green-100 text-green-800' :
+                              'bg-neutral-100 text-neutral-700'
+                            }`}>{order.estado}</span>
+                          </div>
+                          <div className="text-right text-neutral-500 text-[11px]">
+                            {order.createdAt ? new Date(order.createdAt).toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit' }) : '-'}
+                          </div>
+                        </div>
+                      );
+                    })
+                  )}
                 </div>
               </div>
-            </div>
+            )}
+
+            {/* Últimos Pedidos */}
+            {recentOrders.length > 0 && (
+              <div className="mb-8">
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="text-xs font-mono uppercase tracking-widest text-neutral-900">
+                    Últimos Pedidos
+                  </h3>
+                  <button onClick={() => setActiveTab('pedidos')} className="text-[10px] font-mono text-neutral-400 uppercase tracking-widest hover:text-neutral-900 transition-colors">
+                    Ver todos →
+                  </button>
+                </div>
+                <div className="border border-neutral-200 bg-white divide-y divide-neutral-100">
+                  {recentOrders.map((order: any) => {
+                    const totalPallets = (order.items || []).reduce((s: number, i: any) => s + (Number(i.palletsRequested) || 0), 0);
+                    const totalCajas = (order.items || []).reduce((s: number, i: any) => s + (Number(i.cajas) || 0), 0);
+                    return (
+                      <div key={order.id} className="flex items-center gap-4 p-3 hover:bg-neutral-50 transition-colors">
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-3">
+                            <span className="text-xs font-mono font-medium text-neutral-900">{order.orderNumber || '-'}</span>
+                            <span className="text-[10px] font-mono text-neutral-500 truncate">{order.cliente || '-'}</span>
+                            <span className={`px-2 py-0.5 text-[9px] shrink-0 ${
+                              order.estado === 'PENDIENTE' ? 'bg-amber-100 text-amber-800' :
+                              order.estado === 'EN PREPARACIÓN' ? 'bg-blue-100 text-blue-800' :
+                              order.estado === 'LISTO' ? 'bg-purple-100 text-purple-800' :
+                              order.estado === 'DESPACHADO' ? 'bg-green-100 text-green-800' :
+                              'bg-neutral-100 text-neutral-700'
+                            }`}>{order.estado}</span>
+                          </div>
+                          <div className="text-[10px] font-mono text-neutral-400 mt-1">
+                            {totalPallets} PAL · {totalCajas} CAJ · {order.createdAt ? new Date(order.createdAt).toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit', year: 'numeric' }) : '-'}
+                          </div>
+                        </div>
+                        <button onClick={() => setActiveTab('pedidos')} className="px-3 py-1 text-[9px] font-mono border border-neutral-300 text-neutral-600 hover:border-neutral-900 hover:text-neutral-900 transition-colors shrink-0">
+                          VER
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* Movimiento Reciente */}
+            {recentIngresos.length > 0 && (
+              <div className="mb-8">
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="text-xs font-mono uppercase tracking-widest text-neutral-900">
+                    Movimiento Reciente
+                  </h3>
+                  <button onClick={() => setActiveTab('ingreso')} className="text-[10px] font-mono text-neutral-400 uppercase tracking-widest hover:text-neutral-900 transition-colors">
+                    Ver todos →
+                  </button>
+                </div>
+                <div className="border border-neutral-200 bg-white divide-y divide-neutral-100">
+                  {recentIngresos.map((entry: any, idx: number) => (
+                    <div key={idx} className="flex items-center gap-4 p-3 hover:bg-neutral-50 transition-colors">
+                      <div className={`w-1.5 h-8 shrink-0 ${entry.tipo === 'EGRESO' ? 'bg-red-400' : 'bg-green-500'}`} />
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-3">
+                          <span className={`px-2 py-0.5 text-[9px] font-mono ${entry.tipo === 'EGRESO' ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}`}>
+                            {entry.tipo || 'INGRESO'}
+                          </span>
+                          <span className="text-xs font-mono font-medium text-neutral-900 truncate">{entry.cliente || '-'}</span>
+                          <span className="text-[10px] font-mono text-neutral-400 truncate">{entry.contenedor || '-'}</span>
+                        </div>
+                        <div className="text-[10px] font-mono text-neutral-400 mt-1">
+                          {entry.producto || '-'} · {entry.pallets || 0} PAL · {entry.fecha || '-'}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {/* Client Breakdown */}
             {clientBreakdown.length > 0 && (
@@ -611,24 +822,76 @@ export default function LogisticsDashboard() {
                           </div>
                         </button>
 
-                        {isExpanded && (
-                          <div className="border-t border-neutral-200 bg-neutral-50 px-8 py-3">
-                            <p className="text-[10px] font-mono uppercase tracking-widest text-neutral-400 mb-2">Contenedores ({client.containersArr.length})</p>
-                            <div className="flex flex-wrap gap-2">
-                              {client.containersArr.map(cont => (
-                                <span key={cont} className="px-3 py-1.5 bg-white border border-neutral-200 text-[10px] font-mono text-neutral-700 hover:border-neutral-900 transition-colors">
-                                  {cont}
-                                </span>
-                              ))}
+                        {isExpanded && (() => {
+                          const contDetails = clientContainerDetails.get(client.cliente);
+                          return (
+                            <div className="border-t border-neutral-200 bg-neutral-50 px-8 py-4">
+                              {/* Container Badges */}
+                              <p className="text-[10px] font-mono uppercase tracking-widest text-neutral-400 mb-2">Contenedores ({client.containersArr.length})</p>
+                              <div className="flex flex-wrap gap-2 mb-4">
+                                {client.containersArr.map(cont => (
+                                  <span key={cont} className="px-3 py-1.5 bg-white border border-neutral-200 text-[10px] font-mono text-neutral-700 hover:border-neutral-900 transition-colors">
+                                    {cont}
+                                  </span>
+                                ))}
+                              </div>
+                              {/* Container Detail Table */}
+                              {contDetails && contDetails.size > 0 && (
+                                <div className="border border-neutral-200 bg-white overflow-hidden">
+                                  <div className="grid grid-cols-5 border-b border-neutral-200 bg-neutral-100 p-2 text-[9px] font-mono uppercase tracking-widest text-neutral-500">
+                                    <div>Contenedor</div>
+                                    <div>Productos</div>
+                                    <div className="text-right">Pallets</div>
+                                    <div className="text-right">Cajas</div>
+                                    <div className="text-right">Kg</div>
+                                  </div>
+                                  {Array.from(contDetails.entries()).map(([cont, data]) => (
+                                    <div key={cont} className="grid grid-cols-5 p-2 text-[11px] font-mono text-neutral-700 border-b border-neutral-100 last:border-b-0">
+                                      <div className="font-medium text-neutral-900 truncate">{cont}</div>
+                                      <div className="text-neutral-500">{data.products.size} producto{data.products.size !== 1 ? 's' : ''}</div>
+                                      <div className="text-right">{data.pallets}</div>
+                                      <div className="text-right">{data.cajas}</div>
+                                      <div className="text-right font-medium">{data.kilos.toFixed(1)}</div>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
                             </div>
-                          </div>
-                        )}
+                          );
+                        })()}
                       </div>
                     );
                   })}
                 </div>
               </div>
             )}
+
+            {/* Alertas / Acciones Rápidas */}
+            <div className="mb-8">
+              {dashboardAlerts.length > 0 && (
+                <div className="space-y-2 mb-4">
+                  {dashboardAlerts.map((alert, idx) => (
+                    <div key={idx} className={`flex items-center gap-3 p-3 border text-xs font-mono uppercase tracking-widest ${
+                      alert.type === 'red' ? 'bg-red-50 border-red-200 text-red-800' : 'bg-amber-50 border-amber-200 text-amber-800'
+                    }`}>
+                      <span className="text-base">{alert.type === 'red' ? '▲' : '⚠'}</span>
+                      <span>{alert.message}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <div className="flex items-center gap-2">
+                <button onClick={() => setActiveTab('pedidos')} className="px-4 py-2 text-[10px] font-mono uppercase tracking-widest border border-neutral-300 text-neutral-600 hover:border-neutral-900 hover:text-neutral-900 hover:bg-neutral-900 hover:text-white transition-colors">
+                  Ir a Pedidos
+                </button>
+                <button onClick={() => setActiveTab('ingreso')} className="px-4 py-2 text-[10px] font-mono uppercase tracking-widest border border-neutral-300 text-neutral-600 hover:border-neutral-900 hover:text-neutral-900 hover:bg-neutral-900 hover:text-white transition-colors">
+                  Ir a Ingreso
+                </button>
+                <label htmlFor="excel-upload" className="px-4 py-2 text-[10px] font-mono uppercase tracking-widest border border-neutral-300 text-neutral-600 hover:border-neutral-900 hover:text-neutral-900 hover:bg-neutral-900 hover:text-white transition-colors cursor-pointer">
+                  Cargar Excel
+                </label>
+              </div>
+            </div>
 
             {/* Activity Log */}
             <div>
@@ -637,6 +900,19 @@ export default function LogisticsDashboard() {
                   Registro de Actividad
                   {searchTerm && <span className="text-neutral-400 ml-2">({filteredActivity.length} resultados)</span>}
                 </h3>
+              </div>
+              {/* Activity Filter Row */}
+              <div className="flex items-center gap-1 mb-3">
+                {['TODOS', 'INGRESO', 'DESPACHO', 'TRASLADO'].map(f => (
+                  <button key={f} onClick={() => setActivityFilter(f)}
+                    className={`px-3 py-1.5 text-[9px] font-mono uppercase tracking-widest transition-colors ${
+                      activityFilter === f
+                        ? 'bg-neutral-900 text-white'
+                        : 'bg-neutral-100 text-neutral-500 hover:bg-neutral-200 hover:text-neutral-900'
+                    }`}>
+                    {f}
+                  </button>
+                ))}
               </div>
               <div className="border border-neutral-200 bg-white">
                 <div className="grid grid-cols-6 border-b border-neutral-200 bg-neutral-50 p-4 text-[10px] font-mono uppercase tracking-widest text-neutral-500">
@@ -648,45 +924,78 @@ export default function LogisticsDashboard() {
                   <div className="text-center">Acción</div>
                 </div>
                 <div className="divide-y divide-neutral-100 max-h-96 overflow-auto">
-                  {filteredActivity.length === 0 ? (
-                    <div className="p-8 text-center text-xs font-mono text-neutral-400 uppercase tracking-widest">
-                      {searchTerm ? 'Sin resultados para la búsqueda' : 'No hay registros de actividad. Crea uno con [+ Nuevo Registro]'}
-                    </div>
-                  ) : (
-                    filteredActivity.map((item) => (
-                      <div key={item.id} className="grid grid-cols-6 p-4 text-xs font-mono uppercase tracking-wider text-neutral-900 hover:bg-neutral-50 transition-colors">
-                        <div className="font-medium">{item.guiaId}</div>
-                        <div className="truncate">{item.tipoOperacion}</div>
-                        <div className="text-neutral-500">{item.placaVehiculo || '-'}</div>
-                        <div>
-                          <span className={`px-2 py-1 ${
-                            item.estado === 'COMPLETADO' ? 'bg-neutral-100 text-neutral-900' :
-                            item.estado === 'EN PROCESO' ? 'border border-neutral-900 text-neutral-900' :
-                            item.estado === 'CANCELADO' ? 'bg-red-50 text-red-700 border border-red-200' :
-                            'text-neutral-500 border border-neutral-300'
-                          }`}>{item.estado}</span>
-                        </div>
-                        <div className="text-right text-neutral-500">{getTimeAgo(item.createdAt)}</div>
-                        <div className="text-center">
-                          {item.estado === 'ESPERANDO' && (
-                            <button onClick={() => handleUpdateActivityStatus(item.id!, 'EN PROCESO')}
-                              className="px-2 py-1 text-[9px] border border-neutral-900 text-neutral-900 hover:bg-neutral-900 hover:text-white transition-colors">
-                              INICIAR
-                            </button>
-                          )}
-                          {item.estado === 'EN PROCESO' && (
-                            <button onClick={() => handleUpdateActivityStatus(item.id!, 'COMPLETADO')}
-                              className="px-2 py-1 text-[9px] bg-neutral-100 text-neutral-900 hover:bg-green-100 hover:text-green-800 transition-colors">
-                              COMPLETAR
-                            </button>
-                          )}
-                          {item.estado === 'COMPLETADO' && (
-                            <span className="text-[9px] text-neutral-400">✔</span>
-                          )}
-                        </div>
+                  {(() => {
+                    const filtered = activityFilter === 'TODOS'
+                      ? filteredActivity
+                      : filteredActivity.filter(r => (r.tipoOperacion || '').toUpperCase().includes(activityFilter));
+                    const hasDispatched = dispatchedOrdersRecent.length > 0;
+                    if (filtered.length === 0 && !hasDispatched) return (
+                      <div className="p-8 text-center text-xs font-mono text-neutral-400 uppercase tracking-widest">
+                        {searchTerm ? 'Sin resultados para la búsqueda' : 'No hay registros de actividad. Crea uno con [+ Nuevo Registro]'}
                       </div>
-                    ))
-                  )}
+                    );
+                    return (
+                      <>
+                        {filtered.map((item) => (
+                          <div key={item.id} className="grid grid-cols-6 p-4 text-xs font-mono uppercase tracking-wider text-neutral-900 hover:bg-neutral-50 transition-colors">
+                            <div className="font-medium">{item.guiaId}</div>
+                            <div className="truncate">{item.tipoOperacion}</div>
+                            <div className="text-neutral-500">{item.placaVehiculo || '-'}</div>
+                            <div>
+                              <span className={`px-2 py-1 ${
+                                item.estado === 'COMPLETADO' ? 'bg-neutral-100 text-neutral-900' :
+                                item.estado === 'EN PROCESO' ? 'border border-neutral-900 text-neutral-900' :
+                                item.estado === 'CANCELADO' ? 'bg-red-50 text-red-700 border border-red-200' :
+                                'text-neutral-500 border border-neutral-300'
+                              }`}>{item.estado}</span>
+                            </div>
+                            <div className="text-right text-neutral-500">{getTimeAgo(item.createdAt)}</div>
+                            <div className="text-center">
+                              {item.estado === 'ESPERANDO' && (
+                                <button onClick={() => handleUpdateActivityStatus(item.id!, 'EN PROCESO')}
+                                  className="px-2 py-1 text-[9px] border border-neutral-900 text-neutral-900 hover:bg-neutral-900 hover:text-white transition-colors">
+                                  INICIAR
+                                </button>
+                              )}
+                              {item.estado === 'EN PROCESO' && (
+                                <button onClick={() => handleUpdateActivityStatus(item.id!, 'COMPLETADO')}
+                                  className="px-2 py-1 text-[9px] bg-neutral-100 text-neutral-900 hover:bg-green-100 hover:text-green-800 transition-colors">
+                                  COMPLETAR
+                                </button>
+                              )}
+                              {item.estado === 'COMPLETADO' && (
+                                <span className="text-[9px] text-neutral-400">✔</span>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                        {/* Recently Dispatched Orders */}
+                        {hasDispatched && (
+                          <>
+                            <div className="bg-green-50 px-4 py-2 text-[9px] font-mono uppercase tracking-widest text-green-700 border-t-2 border-green-200">
+                              Despachos Recientes (Últimos 3 días)
+                            </div>
+                            {dispatchedOrdersRecent.slice(0, 5).map((order: any) => (
+                              <div key={`dispatch-${order.id}`} className="grid grid-cols-6 p-4 text-xs font-mono uppercase tracking-wider text-neutral-900 bg-green-50/30 hover:bg-green-50 transition-colors">
+                                <div className="font-medium">{order.orderNumber || '-'}</div>
+                                <div className="truncate text-green-700">DESPACHO</div>
+                                <div className="text-neutral-500">{order.cliente || '-'}</div>
+                                <div>
+                                  <span className="px-2 py-1 bg-green-100 text-green-800">DESPACHADO</span>
+                                </div>
+                                <div className="text-right text-neutral-500">{getTimeAgo(order.updatedAt)}</div>
+                                <div className="text-center">
+                                  <button onClick={() => setActiveTab('pedidos')} className="px-2 py-1 text-[9px] border border-neutral-300 text-neutral-500 hover:border-neutral-900 hover:text-neutral-900 transition-colors">
+                                    VER
+                                  </button>
+                                </div>
+                              </div>
+                            ))}
+                          </>
+                        )}
+                      </>
+                    );
+                  })()}
                 </div>
               </div>
             </div>
