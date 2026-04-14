@@ -4,8 +4,9 @@ import React, { useState, useRef, useEffect, useMemo } from 'react';
 import dynamic from 'next/dynamic';
 
 const PdfProcessor = dynamic(() => import('../components/PdfProcessor'), { ssr: false });
-const TemperatureMonitor = dynamic(() => import('../components/TemperatureMonitor'), { ssr: false });
 const Pedidos = dynamic(() => import('../components/Pedidos'), { ssr: false });
+const IngresoMercaderia = dynamic(() => import('../components/IngresoMercaderia'), { ssr: false });
+const TemperatureMonitor = dynamic(() => import('../components/TemperatureMonitor'), { ssr: false });
 
 interface ActivityRecord {
   id?: string;
@@ -26,6 +27,7 @@ export default function LogisticsDashboard() {
   const [isUploading, setIsUploading] = useState(false);
   const [isResetModalOpen, setIsResetModalOpen] = useState(false);
   const [expandedContainers, setExpandedContainers] = useState<Set<string>>(new Set());
+  const [expandedClients, setExpandedClients] = useState<Set<string>>(new Set());
   const [isResetting, setIsResetting] = useState(false);
   const [toastMessage, setToastMessage] = useState<{text: string, type: 'success' | 'error'} | null>(null);
   const [currentDate, setCurrentDate] = useState<string>('');
@@ -86,22 +88,74 @@ export default function LogisticsDashboard() {
     }
   }, []);
 
-  // KPIs computed from real data
+  // KPIs computed from real inventory data
+  // Update inventory from Pedidos
+  const handleUpdateInventory = (updatedData: any[]) => {
+    setInventoryData(updatedData);
+    localStorage.setItem(INVENTORY_CACHE_KEY, JSON.stringify(updatedData));
+  };
+
   const kpis = useMemo(() => {
-    // Envíos en Tránsito = despachos con estado EN PROCESO
-    const enTransito = activityRecords.filter(r => r.estado === 'EN PROCESO').length;
-
-    // Carga Recibida (Ton) = total kilos de inventario / 1000
     const totalKilos = inventoryData.reduce((sum, item) => sum + (Number(item.kilos) || 0), 0);
-    const toneladas = (totalKilos / 1000).toFixed(1);
+    const totalPallets = inventoryData.reduce((sum, item) => sum + (Number(item.pallets) || 0), 0);
+    const uniqueContainers = [...new Set(inventoryData.map(i => (i.contenedor || '').trim()).filter(Boolean))];
+    const uniqueClients = [...new Set(inventoryData.map(i => (i.cliente || '').trim()).filter(Boolean))];
+    const totalCajas = inventoryData.reduce((sum, item) => sum + (Number(item.cantidad) || 0), 0);
 
-    // Vehículos en Patio = registros únicos con estado ESPERANDO
-    const vehiculosEspera = [...new Set(
-      activityRecords.filter(r => r.estado === 'ESPERANDO').map(r => r.placaVehiculo).filter(Boolean)
-    )].length;
+    // Orders stats
+    let ordersTodayCount = 0, ordersPending = 0, ordersDispatched = 0;
+    try {
+      const ordersRaw = typeof window !== 'undefined' ? JSON.parse(localStorage.getItem('frimaral_orders_cache_v1') || '[]') : [];
+      const today = new Date().toISOString().split('T')[0];
+      ordersTodayCount = ordersRaw.filter((o: any) => o.createdAt.startsWith(today)).length;
+      ordersPending = ordersRaw.filter((o: any) => o.estado === 'PENDIENTE').length;
+      ordersDispatched = ordersRaw.filter((o: any) => o.estado === 'DESPACHADO' && o.updatedAt.startsWith(today)).length;
+    } catch {}
 
-    return { enTransito, toneladas, vehiculosEspera };
-  }, [inventoryData, activityRecords]);
+    return {
+      containers: uniqueContainers.length,
+      clients: uniqueClients.length,
+      pallets: totalPallets,
+      kilos: totalKilos,
+      toneladas: (totalKilos / 1000).toFixed(1),
+      cajas: totalCajas,
+      containerCapacity: 500,
+      occupiedPercent: ((uniqueContainers.length / 500) * 100).toFixed(1),
+      ordersToday: ordersTodayCount,
+      ordersPending,
+      ordersDispatched,
+    };
+  }, [inventoryData]);
+
+  // Client breakdown: containers, pallets, kilos per client
+  const clientBreakdown = useMemo(() => {
+    const map = new Map<string, {
+      cliente: string;
+      containers: Set<string>;
+      pallets: number;
+      cajas: number;
+      kilos: number;
+    }>();
+
+    inventoryData.forEach(item => {
+      const cli = (item.cliente || '-').trim();
+      const cont = (item.contenedor || '').trim();
+      if (!cont) return;
+
+      if (!map.has(cli)) {
+        map.set(cli, { cliente: cli, containers: new Set(), pallets: 0, cajas: 0, kilos: 0 });
+      }
+      const entry = map.get(cli)!;
+      if (cont) entry.containers.add(cont);
+      entry.pallets += Number(item.pallets) || 0;
+      entry.cajas += Number(item.cantidad) || 0;
+      entry.kilos += Number(item.kilos) || 0;
+    });
+
+    return Array.from(map.values())
+      .map(e => ({ ...e, containersArr: Array.from(e.containers).sort() }))
+      .sort((a, b) => b.kilos - a.kilos);
+  }, [inventoryData]);
 
   const handleSaveRecord = async () => {
     if (!newRecord.guiaId.trim()) {
@@ -339,6 +393,14 @@ export default function LogisticsDashboard() {
     });
   };
 
+  const toggleClient = (key: string) => {
+    setExpandedClients(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      return next;
+    });
+  };
+
   return (
     <div className="h-screen overflow-hidden bg-neutral-100 flex text-neutral-900 font-sans selection:bg-neutral-900 selection:text-white relative">
       {/* Toast */}
@@ -360,8 +422,9 @@ export default function LogisticsDashboard() {
           {[
             { key: 'dashboard', label: '01. Panel Principal' },
             { key: 'inventory', label: '02. Inventario' },
-            { key: 'pedidos', label: '03. Pedidos' },
-            { key: 'despachos', label: '04. Despachos' },
+            { key: 'despachos', label: '03. Despachos' },
+            { key: 'pedidos', label: '04. Pedidos' },
+            { key: 'ingreso', label: '05. Ingreso' },
             { key: 'configuracion', label: '06. Configuración' },
           ].map(tab => (
             <button key={tab.key}
@@ -420,7 +483,7 @@ export default function LogisticsDashboard() {
               <div>
                 <h2 className="text-2xl font-light tracking-tight text-neutral-900 uppercase">Resumen Operativo</h2>
                 <p className="text-xs font-mono text-neutral-500 mt-2 uppercase tracking-widest">
-                  Actualizado: {currentDate} &middot; {inventoryData.length} ítems en inventario &middot; {activityRecords.length} registros
+                  Actualizado: {currentDate} &middot; {inventoryData.length} ítems en inventario
                 </p>
               </div>
               <button onClick={() => setIsModalOpen(true)}
@@ -429,30 +492,143 @@ export default function LogisticsDashboard() {
               </button>
             </div>
 
-            {/* KPIs from REAL data */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-px bg-neutral-200 border border-neutral-200 mb-10">
-              <div className="bg-white p-8">
-                <p className="text-[10px] font-mono uppercase tracking-widest text-neutral-500 mb-4">Envíos en Tránsito</p>
-                <h3 className="text-5xl font-light tracking-tighter text-neutral-900">{kpis.enTransito}</h3>
-                <div className="mt-6 text-[10px] font-mono text-neutral-500 uppercase tracking-widest border-t border-neutral-100 pt-4">
-                  <span>Registros con estado EN PROCESO</span>
+            {/* KPIs - Top row */}
+            <div className="grid grid-cols-1 md:grid-cols-5 gap-px bg-neutral-200 border border-neutral-200 mb-8">
+              {/* Ocupación de Cámara */}
+              <div className="bg-white p-6 md:col-span-2">
+                <p className="text-xs font-mono uppercase tracking-widest text-neutral-500 mb-3">Ocupación de Cámara</p>
+                <div className="flex items-end gap-3">
+                  <h3 className="text-5xl font-light tracking-tighter text-neutral-900">{kpis.containers}</h3>
+                  <span className="text-xl font-light text-neutral-400 mb-1">/ {kpis.containerCapacity}</span>
+                </div>
+                <div className="mt-4 w-full bg-neutral-100 h-2">
+                  <div
+                    className={`h-full transition-all ${Number(kpis.occupiedPercent) > 80 ? 'bg-red-500' : Number(kpis.occupiedPercent) > 50 ? 'bg-amber-500' : 'bg-green-500'}`}
+                    style={{ width: `${Math.min(Number(kpis.occupiedPercent), 100)}%` }}
+                  />
+                </div>
+                <div className="mt-2 text-xs font-mono text-neutral-400 uppercase tracking-widest">
+                  {kpis.occupiedPercent}% ocupado &middot; 20 PIES
                 </div>
               </div>
-              <div className="bg-white p-8">
-                <p className="text-[10px] font-mono uppercase tracking-widest text-neutral-500 mb-4">Carga Recibida (Ton)</p>
+
+              {/* Clientes Activos */}
+              <div className="bg-white p-6">
+                <p className="text-xs font-mono uppercase tracking-widest text-neutral-500 mb-3">Clientes Activos</p>
+                <h3 className="text-5xl font-light tracking-tighter text-neutral-900">{kpis.clients}</h3>
+                <div className="mt-6 text-xs font-mono text-neutral-500 uppercase tracking-widest border-t border-neutral-100 pt-3">
+                  En cámara
+                </div>
+              </div>
+
+              {/* Total Pallets */}
+              <div className="bg-white p-6">
+                <p className="text-xs font-mono uppercase tracking-widest text-neutral-500 mb-3">Total Pallets</p>
+                <h3 className="text-5xl font-light tracking-tighter text-neutral-900">{kpis.pallets.toLocaleString()}</h3>
+                <div className="mt-6 text-xs font-mono text-neutral-500 uppercase tracking-widest border-t border-neutral-100 pt-3">
+                  {kpis.cajas.toLocaleString()} cajas
+                </div>
+              </div>
+
+              {/* Peso Total */}
+              <div className="bg-white p-6">
+                <p className="text-xs font-mono uppercase tracking-widest text-neutral-500 mb-3">Peso Total</p>
                 <h3 className="text-5xl font-light tracking-tighter text-neutral-900">{kpis.toneladas}</h3>
-                <div className="mt-6 text-[10px] font-mono text-neutral-500 uppercase tracking-widest border-t border-neutral-100 pt-4">
-                  <span>Total del inventario actual</span>
-                </div>
-              </div>
-              <div className="bg-white p-8">
-                <p className="text-[10px] font-mono uppercase tracking-widest text-neutral-500 mb-4">Vehículos en Patio</p>
-                <h3 className="text-5xl font-light tracking-tighter text-neutral-900">{String(kpis.vehiculosEspera).padStart(2, '0')}</h3>
-                <div className="mt-6 text-[10px] font-mono text-neutral-500 uppercase tracking-widest border-t border-neutral-100 pt-4">
-                  <span>Registros en espera de procesamiento</span>
+                <div className="mt-6 text-xs font-mono text-neutral-500 uppercase tracking-widest border-t border-neutral-100 pt-3">
+                  Toneladas
                 </div>
               </div>
             </div>
+
+            {/* Orders KPIs */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-px bg-neutral-200 border border-neutral-200 mb-8">
+              <div className="bg-amber-50 p-5">
+                <p className="text-xs font-mono uppercase tracking-widest text-neutral-500 mb-3">Pedidos Hoy</p>
+                <h3 className="text-3xl font-light tracking-tighter text-neutral-900">{kpis.ordersToday}</h3>
+                <div className="mt-4 text-xs font-mono text-neutral-500 uppercase tracking-widest border-t border-neutral-100 pt-3">
+                  Creados en el día
+                </div>
+              </div>
+              <div className="bg-blue-50 p-5">
+                <p className="text-xs font-mono uppercase tracking-widest text-neutral-500 mb-3">Pendientes</p>
+                <h3 className="text-3xl font-light tracking-tighter text-neutral-900">{kpis.ordersPending}</h3>
+                <div className="mt-4 text-xs font-mono text-neutral-500 uppercase tracking-widest border-t border-neutral-100 pt-3">
+                  Esperando preparación
+                </div>
+              </div>
+              <div className="bg-green-50 p-5">
+                <p className="text-xs font-mono uppercase tracking-widest text-neutral-500 mb-3">Despachados Hoy</p>
+                <h3 className="text-3xl font-light tracking-tighter text-neutral-900">{kpis.ordersDispatched}</h3>
+                <div className="mt-4 text-xs font-mono text-neutral-500 uppercase tracking-widest border-t border-neutral-100 pt-3">
+                  Completados
+                </div>
+              </div>
+            </div>
+
+            {/* Client Breakdown */}
+            {clientBreakdown.length > 0 && (
+              <div className="mb-8">
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="text-xs font-mono uppercase tracking-widest text-neutral-900">
+                    Desglose por Cliente
+                  </h3>
+                  <span className="text-[10px] font-mono text-neutral-400 uppercase tracking-widest">
+                    {clientBreakdown.length} clientes &middot; click para expandir
+                  </span>
+                </div>
+                <div className="border border-neutral-200 bg-white divide-y divide-neutral-200">
+                  {clientBreakdown.map((client, idx) => {
+                    const isExpanded = expandedClients.has(client.cliente);
+                    const maxKilos = clientBreakdown[0]?.kilos || 1;
+                    const barWidth = (client.kilos / maxKilos * 100).toFixed(1);
+                    return (
+                      <div key={client.cliente}>
+                        <button
+                          onClick={() => toggleClient(client.cliente)}
+                          className="w-full flex items-center gap-4 p-4 hover:bg-neutral-50 transition-colors text-left"
+                        >
+                          <div className={`w-4 h-4 flex items-center justify-center text-neutral-500 transition-transform shrink-0 ${isExpanded ? 'rotate-90' : ''}`}>
+                            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                            </svg>
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-3 mb-1">
+                              <span className="text-sm font-mono font-medium text-neutral-900 truncate">{client.cliente}</span>
+                              <span className="px-1.5 py-0.5 bg-neutral-900 text-white text-[9px] font-mono shrink-0">
+                                #{idx + 1}
+                              </span>
+                            </div>
+                            <div className="flex items-center gap-5 text-xs font-mono text-neutral-500">
+                              <span><span className="font-bold text-neutral-700">{client.containersArr.length}</span> CONT</span>
+                              <span><span className="font-bold text-neutral-700">{client.pallets}</span> PAL</span>
+                              <span><span className="font-bold text-neutral-700">{client.cajas}</span> CAJ</span>
+                              <span><span className="font-bold text-neutral-700">{(client.kilos / 1000).toFixed(1)}</span> TON</span>
+                            </div>
+                          </div>
+                          <div className="w-32 h-1.5 bg-neutral-100 shrink-0 hidden md:block">
+                            <div className="h-full bg-neutral-900" style={{ width: `${barWidth}%` }} />
+                          </div>
+                        </button>
+
+                        {isExpanded && (
+                          <div className="border-t border-neutral-200 bg-neutral-50 px-8 py-3">
+                            <p className="text-[10px] font-mono uppercase tracking-widest text-neutral-400 mb-2">Contenedores ({client.containersArr.length})</p>
+                            <div className="flex flex-wrap gap-2">
+                              {client.containersArr.map(cont => (
+                                <span key={cont} className="px-3 py-1.5 bg-white border border-neutral-200 text-[10px] font-mono text-neutral-700 hover:border-neutral-900 transition-colors">
+                                  {cont}
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
 
             {/* Activity Log */}
             <div>
@@ -655,17 +831,24 @@ export default function LogisticsDashboard() {
           </div>
         )}
 
-        {/* ===== PEDIDOS ===== */}
-        {activeTab === 'pedidos' && (
-          <div className="flex-1 overflow-hidden flex flex-col">
-            <Pedidos inventoryData={inventoryData} />
-          </div>
-        )}
-
         {/* ===== DESPACHOS ===== */}
         {activeTab === 'despachos' && (
           <div className="flex-1 overflow-hidden flex flex-col">
             <PdfProcessor inventoryData={inventoryData} />
+          </div>
+        )}
+
+        {/* ===== PEDIDOS ===== */}
+        {activeTab === 'pedidos' && (
+          <div className="flex-1 overflow-hidden flex flex-col">
+            <Pedidos inventoryData={inventoryData} onUpdateInventory={handleUpdateInventory} />
+          </div>
+        )}
+
+        {/* ===== INGRESO ===== */}
+        {activeTab === 'ingreso' && (
+          <div className="flex-1 overflow-hidden flex flex-col">
+            <IngresoMercaderia inventoryData={inventoryData} onUpdateInventory={handleUpdateInventory} />
           </div>
         )}
 
