@@ -383,6 +383,17 @@ export default function LogisticsDashboard() {
     });
   };
 
+  // Navigate from dashboard to inventory, showing a specific container expanded
+  const navigateToContainer = (contenedor: string) => {
+    setSearchTerm(contenedor);
+    setExpandedContainers(prev => {
+      const next = new Set(prev);
+      next.add(contenedor);
+      return next;
+    });
+    setActiveTab('inventory');
+  };
+
   return (
     <div className="h-screen overflow-hidden bg-neutral-100 flex text-neutral-900 font-sans selection:bg-neutral-900 selection:text-white relative">
       {/* Toast */}
@@ -573,9 +584,14 @@ export default function LogisticsDashboard() {
                             <p className="text-[10px] font-mono uppercase tracking-widest text-neutral-400 mb-2">Contenedores ({client.containersArr.length})</p>
                             <div className="flex flex-wrap gap-2">
                               {client.containersArr.map(cont => (
-                                <span key={cont} className="px-3 py-1.5 bg-white border border-neutral-200 text-[10px] font-mono text-neutral-700 hover:border-neutral-900 transition-colors">
+                                <button
+                                  key={cont}
+                                  onClick={() => navigateToContainer(cont)}
+                                  className="px-3 py-1.5 bg-white border border-neutral-200 text-[10px] font-mono text-neutral-700 hover:border-neutral-900 hover:bg-neutral-900 hover:text-white transition-colors cursor-pointer"
+                                  title={`Ver contenido de ${cont} en Inventario`}
+                                >
                                   {cont}
-                                </span>
+                                </button>
                               ))}
                             </div>
                           </div>
