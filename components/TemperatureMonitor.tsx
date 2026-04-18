@@ -1,38 +1,36 @@
 'use client';
 
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { Thermometer, ExternalLink, RefreshCw, Monitor, Maximize2, Minimize2 } from 'lucide-react';
 
 const TEMPERATURE_URL = 'http://192.168.150.31/TemperaturaWeb/temperatura.php';
 
 export default function TemperatureMonitor() {
   const [loading, setLoading] = useState(true);
-  const [iframeError, setIframeError] = useState(false);
+  const [iframeBlocked, setIframeBlocked] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
-  const iframeRef = useRef<HTMLIFrameElement>(null);
 
-  const handleRefresh = () => {
+  // Timeout: si en 5 segundos no cargó, sacar el spinner
+  // (onLoad/onError no son confiables con iframes cross-origin)
+  useEffect(() => {
+    if (!loading) return;
+    const timer = setTimeout(() => {
+      setLoading(false);
+    }, 5000);
+    return () => clearTimeout(timer);
+  }, [loading, refreshKey]);
+
+  const handleRefresh = useCallback(() => {
     setLoading(true);
-    setIframeError(false);
+    setIframeBlocked(false);
     setRefreshKey(prev => prev + 1);
-  };
+  }, []);
 
-  const handleLoad = () => {
-    setLoading(false);
-  };
-
-  const handleError = () => {
-    setLoading(false);
-    setIframeError(true);
-  };
-
-  // Abrir en nueva pestaña
   const openInNewTab = () => {
     window.open(TEMPERATURE_URL, '_blank');
   };
 
-  // Toggle pantalla completa
   const toggleExpand = () => {
     setExpanded(prev => !prev);
   };
@@ -49,16 +47,16 @@ export default function TemperatureMonitor() {
                 04. Monitoreo de Temperaturas
               </h2>
               <p className="text-xs text-neutral-500 mt-0.5">
-                Sistema de sensores · {TEMPERATURE_URL}
+                Sistema de sensores · 192.168.150.31
               </p>
             </div>
           </div>
           <div className="flex items-center gap-2">
             <button onClick={openInNewTab}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-mono uppercase tracking-widest bg-neutral-100 text-neutral-700 hover:bg-neutral-200 transition-colors"
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-mono uppercase tracking-widest bg-blue-600 text-white hover:bg-blue-700 transition-colors"
               title="Abrir en nueva pestaña">
               <ExternalLink className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">Abrir</span>
+              <span className="hidden sm:inline">Abrir en pestaña nueva</span>
             </button>
             <button onClick={handleRefresh}
               className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-mono uppercase tracking-widest bg-neutral-900 text-white hover:bg-neutral-800 transition-colors"
@@ -75,54 +73,46 @@ export default function TemperatureMonitor() {
         </div>
       </div>
 
-      {/* Contenido del iframe */}
+      {/* Contenido */}
       <div className={`flex-1 relative ${expanded ? '' : 'overflow-hidden'}`}>
+
+        {/* Spinner de carga - desaparece solo a los 5s */}
         {loading && (
           <div className="absolute inset-0 flex items-center justify-center bg-white z-10">
             <div className="text-center">
-              <RefreshCw className="w-8 h-8 text-neutral-400 animate-spin mx-auto mb-3" />
-              <p className="text-xs font-mono uppercase tracking-widest text-neutral-500">Cargando temperaturas...</p>
+              <RefreshCw className="w-8 h-8 text-blue-500 animate-spin mx-auto mb-3" />
+              <p className="text-sm font-mono text-neutral-600">Cargando temperaturas...</p>
+              <p className="text-xs text-neutral-400 mt-1">Si no carga, use el boton "Abrir en pestaña nueva"</p>
             </div>
           </div>
         )}
 
-        {iframeError && !loading && (
+        {/* Error: servidor bloquea iframe */}
+        {iframeBlocked && (
           <div className="absolute inset-0 flex items-center justify-center bg-white z-10">
             <div className="text-center max-w-md p-8">
-              <div className="mx-auto w-16 h-16 rounded-full bg-red-50 flex items-center justify-center mb-4">
-                <Monitor className="w-8 h-8 text-red-500" />
+              <div className="mx-auto w-16 h-16 rounded-full bg-amber-50 flex items-center justify-center mb-4">
+                <Monitor className="w-8 h-8 text-amber-500" />
               </div>
-              <h3 className="text-sm font-mono uppercase tracking-widest mb-2">No se pudo cargar</h3>
-              <p className="text-xs text-neutral-500 mb-1">
-                El servidor de temperaturas no esta disponible o no se puede acceder desde este navegador.
+              <h3 className="text-sm font-mono uppercase tracking-widest mb-2">El servidor bloquea la vista embebida</h3>
+              <p className="text-xs text-neutral-500 mb-6">
+                El servidor de temperaturas tiene configuracion de seguridad que impide mostrarse dentro de esta pagina.
               </p>
-              <p className="text-[11px] text-neutral-400 mb-6">
-                Verifique que este conectado a la red interna y que el servidor 192.168.150.31 este encendido.
-              </p>
-              <div className="flex justify-center gap-3">
-                <button onClick={handleRefresh}
-                  className="px-5 py-2 bg-neutral-900 text-white text-xs font-mono uppercase tracking-widest hover:bg-neutral-800 transition-colors">
-                  Reintentar
-                </button>
-                <button onClick={openInNewTab}
-                  className="px-5 py-2 bg-blue-600 text-white text-xs font-mono uppercase tracking-widest hover:bg-blue-700 transition-colors">
-                  Abrir directamente
-                </button>
-              </div>
+              <button onClick={openInNewTab}
+                className="px-6 py-2.5 bg-blue-600 text-white text-xs font-mono uppercase tracking-widest hover:bg-blue-700 transition-colors">
+                Abrir en pestaña nueva
+              </button>
             </div>
           </div>
         )}
 
+        {/* Iframe sin sandbox - sin restricciones */}
         <iframe
-          ref={iframeRef}
           key={refreshKey}
           src={TEMPERATURE_URL}
           className={`w-full ${expanded ? 'h-[calc(100vh-60px)]' : 'h-full'} border-0`}
-          onLoad={handleLoad}
-          onError={handleError}
           title="Monitoreo de Temperaturas"
-          sandbox="allow-scripts allow-same-origin allow-popups"
-          style={{ opacity: loading ? 0 : 1, transition: 'opacity 0.3s ease' }}
+          referrerPolicy="no-referrer"
         />
       </div>
     </div>
