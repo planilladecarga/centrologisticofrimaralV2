@@ -23,6 +23,16 @@ const nextConfig: NextConfig = {
   output: process.env.GITHUB_ACTIONS ? 'export' : undefined,
   basePath: process.env.GITHUB_ACTIONS ? '/centrologisticofrimaralV2' : undefined,
   transpilePackages: ['motion'],
+  // Proxy local para temperaturas (solo funciona en modo servidor, no en static export)
+  async rewrites() {
+    if (process.env.GITHUB_ACTIONS) return [];
+    return [
+      {
+        source: '/api/temperatura',
+        destination: 'http://192.168.150.31/TemperaturaWeb/temperatura.php',
+      },
+    ];
+  },
   webpack: (config, {dev}) => {
     // HMR is disabled in AI Studio via DISABLE_HMR env var.
     // Do not modifyâfile watching is disabled to prevent flickering during agent edits.
