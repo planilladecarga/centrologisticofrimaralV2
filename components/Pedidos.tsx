@@ -1410,6 +1410,16 @@ export default function Pedidos({ inventoryData, onUpdateInventory }: PedidosPro
               Duplicar
             </button>
 
+            {/* Reimprimir Remito (DESPACHADO only) */}
+            {order.estado === 'DESPACHADO' && (
+              <button
+                onClick={() => printRemito(order)}
+                className="px-4 py-2 text-[10px] font-mono uppercase tracking-widest border border-neutral-900 bg-neutral-900 text-white hover:bg-neutral-700 transition-colors"
+              >
+                Reimprimir Remito
+              </button>
+            )}
+
             {/* Status transitions */}
             {transitions.map(status => (
               <button
