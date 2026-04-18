@@ -112,7 +112,16 @@ export default function TemperatureMonitor() {
   const [errorMsg, setErrorMsg] = useState('');
   const [countdown, setCountdown] = useState(REFRESH_SECONDS);
 
+  // Detectar si estamos en GitHub Pages (static export sin servidor)
+  const isGitHubPages = typeof window !== 'undefined' && window.location.hostname.includes('github.io');
+
   const fetchData = useCallback(async () => {
+    // Si estamos en GitHub Pages, no intentar el fetch
+    if (typeof window !== 'undefined' && window.location.hostname.includes('github.io')) {
+      setStatus('not_local');
+      return;
+    }
+
     setStatus('loading');
     setErrorMsg('');
 
@@ -127,6 +136,11 @@ export default function TemperatureMonitor() {
       clearTimeout(timeoutId);
 
       if (!response.ok) {
+        // 404 = no hay proxy local = no estamos corriendo con servidor
+        if (response.status === 404) {
+          setStatus('not_local');
+          return;
+        }
         setStatus('offline');
         setErrorMsg(`El servidor respondió con estado ${response.status}`);
         return;
@@ -165,9 +179,19 @@ export default function TemperatureMonitor() {
     }
   }, []);
 
-  useEffect(() => { fetchData(); }, [fetchData]);
-
   useEffect(() => {
+    // Si estamos en GitHub Pages, ir directo al fallback sin hacer fetch
+    if (isGitHubPages) {
+      setStatus('not_local');
+      return;
+    }
+    fetchData();
+  }, [fetchData, isGitHubPages]);
+
+  // Solo auto-refresh si los datos se obtuvieron correctamente
+  useEffect(() => {
+    if (status !== 'ok' && status !== 'loading') return;
+
     const timer = setInterval(() => {
       setCountdown(prev => {
         if (prev <= 1) { fetchData(); return REFRESH_SECONDS; }
@@ -175,7 +199,7 @@ export default function TemperatureMonitor() {
       });
     }, 1000);
     return () => clearInterval(timer);
-  }, [fetchData]);
+  }, [fetchData, status]);
 
   const cfmt = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 
