@@ -28,8 +28,12 @@ const nextConfig: NextConfig = {
     if (process.env.GITHUB_ACTIONS) return [];
     return [
       {
-        source: '/api/temperatura',
-        destination: 'http://192.168.150.31/TemperaturaWeb/temperatura.php',
+        source: '/api/temperatura/sensors',
+        destination: 'http://192.168.150.31/TemperaturaWeb/get_sensors.php',
+      },
+      {
+        source: '/api/temperatura/data',
+        destination: 'http://192.168.150.31/TemperaturaWeb/monitor_temperatura.php',
       },
     ];
   },
