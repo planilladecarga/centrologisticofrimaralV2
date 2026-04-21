@@ -1,20 +1,34 @@
 'use client';
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   RefreshCw, Thermometer,
   TrendingUp, TrendingDown,
   BarChart3, Monitor, ExternalLink, AlertTriangle,
-  CalendarDays, Microchip
+  CalendarDays, Microchip, Info
 } from 'lucide-react';
 import {
   ResponsiveContainer, LineChart, Line, XAxis,
-  YAxis, CartesianGrid, Tooltip
+  YAxis, CartesianGrid, Tooltip, ReferenceLine
 } from 'recharts';
 
 const REFRESH_MS = 3 * 60 * 1000;
 const REFRESH_SECONDS = REFRESH_MS / 1000;
 const DIRECT_URL = 'http://192.168.150.31/TemperaturaWeb/temperatura.php';
+
+const DEMO_SENSORS = [
+  'Camara Frigorifica 1 - Congelados',
+  'Camara Frigorifica 2 - Refrigerados',
+  'Camara Frigorifica 3 - Lacteos',
+  'Camara Frigorifica 4 - Carnes',
+];
+
+const BASE_TEMP: Record<string, number> = {
+  'Camara Frigorifica 1 - Congelados': -20.5,
+  'Camara Frigorifica 2 - Refrigerados': 2.0,
+  'Camara Frigorifica 3 - Lacteos': 4.0,
+  'Camara Frigorifica 4 - Carnes': -1.5,
+};
 
 interface TempRecord {
   sensor: string;
@@ -38,7 +52,7 @@ interface TempData {
   error?: string;
 }
 
-type ViewStatus = 'loading' | 'ok' | 'error' | 'not_available';
+type ViewStatus = 'loading' | 'ok' | 'error' | 'demo';
 
 function todayStr() {
   return new Date().toISOString().slice(0, 10);
@@ -50,26 +64,111 @@ function formatDate(dateStr: string) {
   return dateStr;
 }
 
-function tempColor(t: number) {
+function tempColor(t: number): string {
   if (t < -24) return 'text-blue-600';
   if (t > -18) return 'text-red-600';
   return 'text-green-600';
 }
 
+function tempStatus(t: number): { label: string; color: string } {
+  if (t < -24) return { label: 'Frio', color: 'bg-blue-100 text-blue-700 border-blue-300' };
+  if (t > -18) return { label: 'Calor', color: 'bg-red-100 text-red-700 border-red-300' };
+  return { label: 'Normal', color: 'bg-green-100 text-green-700 border-green-300' };
+}
+
+function statColor(value: number): string {
+  if (value < -24) return 'blue';
+  if (value > -18) return 'red';
+  return 'green';
+}
+
+// Generador de datos demo realistas
+function generateDemoData(sensor: string): TempData {
+  const base = BASE_TEMP[sensor] ?? -20.5;
+  const now = new Date();
+  const temperatures: TempRecord[] = [];
+  const graphLabels: string[] = [];
+  const graphData: number[] = [];
+
+  // 48 lecturas cada 30 minutos (24 horas hacia atras)
+  const totalReadings = 48;
+  const intervalMs = 30 * 60 * 1000;
+
+  for (let i = totalReadings - 1; i >= 0; i--) {
+    const readingTime = new Date(now.getTime() - i * intervalMs);
+
+    // Variacion sinusoidal para simular ciclo de compresor (periodo ~6 horas)
+    const hoursFromStart = i * 0.5;
+    const sinusoidal = Math.sin((hoursFromStart / 6) * Math.PI * 2) * 1.8;
+
+    // Ruido aleatorio realista
+    const noise = (Math.random() - 0.5) * 1.2;
+
+    // Variacion gradual por puerta abierta (simulamos 1-2 picos por dia)
+    let doorEffect = 0;
+    if (i === 8 || i === 7 || i === 32 || i === 31) {
+      doorEffect = Math.random() * 4 + 2; // Pico de calentamiento
+    } else if (i === 9 || i === 33) {
+      doorEffect = Math.random() * 1.5; // Recuperacion parcial
+    }
+
+    const temp = base + sinusoidal + noise + doorEffect;
+    const roundedTemp = Math.round(temp * 100) / 100;
+
+    const fecha = readingTime.toISOString().slice(0, 10);
+    const hora = readingTime.toTimeString().slice(0, 8);
+    const horaLabel = readingTime.toTimeString().slice(0, 5);
+
+    temperatures.push({
+      sensor,
+      fecha,
+      hora,
+      temperatura: roundedTemp.toFixed(2),
+    });
+
+    graphLabels.push(horaLabel);
+    graphData.push(roundedTemp);
+  }
+
+  // Calcular estadisticas
+  const temps = graphData;
+  const minTemp = Math.min(...temps);
+  const maxTemp = Math.max(...temps);
+  const avgTemp = temps.reduce((a, b) => a + b, 0) / temps.length;
+
+  return {
+    stats: {
+      min_temp: Math.round(minTemp * 100) / 100,
+      max_temp: Math.round(maxTemp * 100) / 100,
+      avg_temp: Math.round(avgTemp * 100) / 100,
+    },
+    temperatures,
+    graph_labels: graphLabels,
+    graph_data: graphData,
+  };
+}
+
 export default function TemperatureMonitor() {
-  const [sensors, setSensors] = useState<string[]>([]);
-  const [selectedSensor, setSelectedSensor] = useState('');
+  const [sensors, setSensors] = useState<string[]>(DEMO_SENSORS);
+  const [selectedSensor, setSelectedSensor] = useState(DEMO_SENSORS[0]);
   const [startDate, setStartDate] = useState(todayStr());
   const [endDate, setEndDate] = useState(todayStr());
   const [data, setData] = useState<TempData | null>(null);
   const [status, setStatus] = useState<ViewStatus>('loading');
   const [errorMsg, setErrorMsg] = useState('');
   const [countdown, setCountdown] = useState(REFRESH_SECONDS);
+  const [isDemo, setIsDemo] = useState(false);
 
   const isGitHubPages = typeof window !== 'undefined' && window.location.hostname.includes('github.io');
 
-  // Obtener sensores
+  // Obtener sensores (intenta servidor, fallback a demo)
   const fetchSensors = useCallback(async () => {
+    if (isGitHubPages) {
+      setIsDemo(true);
+      setSensors(DEMO_SENSORS);
+      setSelectedSensor(DEMO_SENSORS[0]);
+      return false;
+    }
     try {
       const res = await fetch('/api/temperatura/sensors', { cache: 'no-store' });
       if (!res.ok) throw new Error(`${res.status}`);
@@ -83,23 +182,34 @@ export default function TemperatureMonitor() {
     } catch {
       return false;
     }
-  }, []);
+  }, [isGitHubPages]);
 
-  // Obtener datos de temperatura
+  // Obtener datos de temperatura (intenta servidor, fallback a demo)
   const fetchData = useCallback(async () => {
     if (!selectedSensor) return;
     setStatus('loading');
     setErrorMsg('');
 
+    if (isGitHubPages) {
+      // Modo demo para GitHub Pages
+      const demoData = generateDemoData(selectedSensor);
+      setData(demoData);
+      setStatus('demo');
+      setIsDemo(true);
+      setCountdown(REFRESH_SECONDS);
+      return;
+    }
+
     try {
+      const bodyParams = new URLSearchParams();
+      bodyParams.append('sensor', selectedSensor);
+      bodyParams.append('start_date', startDate);
+      bodyParams.append('end_date', endDate);
+
       const res = await fetch('/api/temperatura/data', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          sensor: selectedSensor,
-          start_date: startDate,
-          end_date: endDate,
-        }),
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: bodyParams.toString(),
         cache: 'no-store',
       });
 
@@ -115,39 +225,41 @@ export default function TemperatureMonitor() {
 
       setData(json);
       setStatus('ok');
+      setIsDemo(false);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Error desconocido';
-      setErrorMsg(msg);
-      setStatus('error');
+
+      // Si no hay servidor, generar datos demo en vez de mostrar error
+      const demoData = generateDemoData(selectedSensor);
+      setData(demoData);
+      setStatus('demo');
+      setIsDemo(true);
+      setErrorMsg(msg); // Guardar por si se necesita
     } finally {
       setCountdown(REFRESH_SECONDS);
     }
-  }, [selectedSensor, startDate, endDate]);
+  }, [selectedSensor, startDate, endDate, isGitHubPages]);
 
   // Carga inicial
   useEffect(() => {
-    if (isGitHubPages) {
-      setStatus('not_available');
-      return;
-    }
     fetchSensors().then((hasSensors) => {
-      if (!hasSensors) {
-        setStatus('error');
-        setErrorMsg('No se pudo obtener la lista de sensores del servidor.');
+      if (!hasSensors && !isGitHubPages) {
+        // Servidor no disponible -> modo demo automatico
+        setIsDemo(true);
       }
     });
   }, [fetchSensors, isGitHubPages]);
 
   // Cargar datos cuando cambia el sensor seleccionado
   useEffect(() => {
-    if (!selectedSensor || isGitHubPages) return;
+    if (!selectedSensor) return;
     fetchData();
-  }, [selectedSensor, fetchData, isGitHubPages]);
+  }, [selectedSensor, fetchData]);
 
-  // Auto-refresh cada 3 minutos
+  // Auto-refresh cada 3 minutos (solo modo real, no demo)
   useEffect(() => {
+    if (isDemo) return;
     if (status !== 'ok' && status !== 'loading') return;
-    if (isGitHubPages) return;
 
     const timer = setInterval(() => {
       setCountdown(prev => {
@@ -159,60 +271,18 @@ export default function TemperatureMonitor() {
       });
     }, 1000);
     return () => clearInterval(timer);
-  }, [fetchData, status, isGitHubPages]);
+  }, [fetchData, status, isDemo]);
 
   const cfmt = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 
-  // ── Pantalla: GitHub Pages / no disponible ──
-  if (status === 'not_available' || isGitHubPages) {
-    return (
-      <div className="flex flex-col h-full bg-white border border-neutral-200">
-        <div className="p-4 border-b border-neutral-200 bg-neutral-50 flex-shrink-0">
-          <h2 className="text-lg font-mono uppercase tracking-widest text-neutral-900 flex items-center gap-3">
-            <Thermometer className="w-5 h-5 text-blue-600" />
-            04. Monitoreo de Temperaturas
-          </h2>
-          <p className="text-xs text-neutral-500 mt-1">Sistema de sensores de temperatura</p>
-        </div>
-        <div className="flex-1 flex items-center justify-center bg-neutral-50 p-8">
-          <div className="text-center max-w-lg">
-            <div className="mx-auto w-20 h-20 rounded-full bg-amber-50 flex items-center justify-center mb-5">
-              <AlertTriangle className="w-10 h-10 text-amber-500" />
-            </div>
-            <h3 className="text-base font-mono uppercase tracking-widest mb-3 text-neutral-900">
-              Temperaturas no disponibles en este modo
-            </h3>
-            <p className="text-sm text-neutral-500 mb-2">
-              Los datos provienen del servidor interno (192.168.150.31) y solo pueden accederse
-              cuando la aplicacion se ejecuta <strong>localmente en la red interna</strong>.
-            </p>
-            <p className="text-xs text-neutral-400 mb-6">
-              GitHub Pages no tiene acceso a la red interna del centro logistico.
-            </p>
-            <div className="bg-neutral-900 text-green-400 rounded-lg p-4 text-left font-mono text-xs mb-6 overflow-x-auto">
-              <p className="text-neutral-500 mb-2"># Para ver temperaturas, ejecute localmente:</p>
-              <p className="text-green-300">cd centrologisticofrimaralV2</p>
-              <p className="text-green-300">npm install</p>
-              <p className="text-green-300">npm run dev</p>
-              <p className="text-neutral-500 mt-2"># Luego abra en el navegador:</p>
-              <p className="text-green-300">http://localhost:3000</p>
-            </div>
-            <button onClick={() => window.open(DIRECT_URL, '_blank')}
-              className="inline-flex items-center gap-2 px-5 py-2.5 bg-blue-600 text-white text-xs font-mono uppercase tracking-widest hover:bg-blue-700 transition-colors rounded">
-              <ExternalLink className="w-4 h-4" />
-              Abrir servidor de temperaturas directamente
-            </button>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
   // Preparar datos del grafico
-  const chartData = data?.graph_labels?.map((label, i) => ({
-    hora: label,
-    valor: data.graph_data[i],
-  })) || [];
+  const chartData = useMemo(() =>
+    data?.graph_labels?.map((label, i) => ({
+      hora: label,
+      valor: data.graph_data[i],
+    })) || [],
+    [data]
+  );
 
   // Temperatura actual (primer registro)
   const currentTemp = data?.temperatures?.[0]
@@ -278,6 +348,13 @@ export default function TemperatureMonitor() {
             <input type="date" value={endDate} onChange={e => setEndDate(e.target.value)}
               className="w-full border border-neutral-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
           </div>
+          <div>
+            <button onClick={() => window.open(DIRECT_URL, '_blank')}
+              className="px-4 py-1.5 text-xs font-mono uppercase tracking-widest bg-blue-600 text-white hover:bg-blue-700 transition-colors flex items-center gap-2">
+              <ExternalLink className="w-3 h-3" />
+              Ver datos reales
+            </button>
+          </div>
         </div>
       </div>
 
@@ -294,56 +371,56 @@ export default function TemperatureMonitor() {
           </div>
         )}
 
-        {/* Error */}
-        {status === 'error' && !data && (
-          <div className="flex items-center justify-center h-full p-8">
-            <div className="text-center max-w-md">
-              <div className="mx-auto w-16 h-16 rounded-full bg-red-50 flex items-center justify-center mb-4">
-                <Monitor className="w-8 h-8 text-red-500" />
-              </div>
-              <h3 className="text-sm font-mono uppercase tracking-widest mb-2">Servicio no disponible</h3>
-              <p className="text-xs text-neutral-500 mb-1">{errorMsg}</p>
-              <p className="text-[11px] text-neutral-400 mb-6">
-                Verifique que este conectado a la red interna y que el servidor 192.168.150.31 este encendido.
-              </p>
-              <div className="flex justify-center gap-3">
-                <button onClick={() => fetchData()}
-                  className="px-5 py-2 bg-neutral-900 text-white text-xs font-mono uppercase tracking-widest hover:bg-neutral-800">
-                  Reintentar
-                </button>
-                <button onClick={() => window.open(DIRECT_URL, '_blank')}
-                  className="px-5 py-2 bg-blue-600 text-white text-xs font-mono uppercase tracking-widest hover:bg-blue-700">
-                  Abrir directamente
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Datos */}
+        {/* Datos (real o demo) */}
         {data && (
           <div className="p-4">
             {/* Banner de estado */}
-            <div className="bg-blue-600 text-white px-4 py-2.5 flex items-center gap-3 mb-4 text-xs font-mono uppercase tracking-widest rounded">
-              <span className="w-2 h-2 rounded-full bg-green-300 animate-pulse"></span>
-              <span className="font-bold">Sistema activo</span>
-              <span className="opacity-70">·</span>
-              <span>Auto-refresh cada 3 minutos</span>
-              <span className="opacity-70">·</span>
-              <span>Proxima en {cfmt(countdown)}</span>
-              <span className="ml-auto opacity-70">{selectedSensor}</span>
-            </div>
+            {isDemo ? (
+              <div className="bg-amber-500 text-white px-4 py-2.5 flex items-center gap-3 mb-4 text-xs font-mono uppercase tracking-widest rounded">
+                <AlertTriangle className="w-4 h-4 flex-shrink-0" />
+                <span className="font-bold">Modo demostracion</span>
+                <span className="opacity-80">·</span>
+                <span>Datos simulados (no son lecturas reales)</span>
+                <span className="ml-auto opacity-80">{selectedSensor}</span>
+              </div>
+            ) : (
+              <div className="bg-blue-600 text-white px-4 py-2.5 flex items-center gap-3 mb-4 text-xs font-mono uppercase tracking-widest rounded">
+                <span className="w-2 h-2 rounded-full bg-green-300 animate-pulse"></span>
+                <span className="font-bold">Datos en vivo</span>
+                <span className="opacity-70">·</span>
+                <span>Auto-refresh cada 3 minutos</span>
+                <span className="opacity-70">·</span>
+                <span>Proxima en {cfmt(countdown)}</span>
+                <span className="ml-auto opacity-70">{selectedSensor}</span>
+              </div>
+            )}
 
             {/* Tarjetas de estadisticas */}
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
-              <StatCard color="green" value={currentTemp ?? 0} label="Temperatura Actual"
-                icon={<Thermometer className="w-6 h-6" />} />
-              <StatCard color="blue" value={parseFloat(String(data.stats?.min_temp ?? 0))} label="Temperatura Minima"
-                icon={<TrendingDown className="w-6 h-6" />} />
-              <StatCard color="red" value={parseFloat(String(data.stats?.max_temp ?? 0))} label="Temperatura Maxima"
-                icon={<TrendingUp className="w-6 h-6" />} />
-              <StatCard color="purple" value={parseFloat(String(data.stats?.avg_temp ?? 0))} label="Temperatura Promedio"
-                icon={<BarChart3 className="w-6 h-6" />} />
+              <StatCard
+                color={currentTemp != null ? statColor(currentTemp) : 'green'}
+                value={currentTemp ?? 0}
+                label="Temperatura Actual"
+                icon={<Thermometer className="w-6 h-6" />}
+              />
+              <StatCard
+                color={data.stats ? statColor(data.stats.min_temp) : 'blue'}
+                value={parseFloat(String(data.stats?.min_temp ?? 0))}
+                label="Temperatura Minima"
+                icon={<TrendingDown className="w-6 h-6" />}
+              />
+              <StatCard
+                color={data.stats ? statColor(data.stats.max_temp) : 'red'}
+                value={parseFloat(String(data.stats?.max_temp ?? 0))}
+                label="Temperatura Maxima"
+                icon={<TrendingUp className="w-6 h-6" />}
+              />
+              <StatCard
+                color={data.stats ? statColor(data.stats.avg_temp) : 'green'}
+                value={parseFloat(String(data.stats?.avg_temp ?? 0))}
+                label="Temperatura Promedio"
+                icon={<BarChart3 className="w-6 h-6" />}
+              />
             </div>
 
             {/* Grafica */}
@@ -357,18 +434,40 @@ export default function TemperatureMonitor() {
                   <ExternalLink className="w-3 h-3" /> Ver en servidor
                 </button>
               </div>
-              <div className="p-4" style={{ height: 280 }}>
+              <div className="p-4" style={{ height: 300 }}>
                 {chartData.length > 1 ? (
                   <ResponsiveContainer width="100%" height="100%">
                     <LineChart data={chartData}>
                       <CartesianGrid strokeDasharray="3 3" stroke="#e5e5e5" />
-                      <XAxis dataKey="hora" tick={{ fontSize: 10, fontFamily: 'monospace' }} stroke="#a3a3a3" />
-                      <YAxis domain={['dataMin - 1', 'dataMax + 1']} tick={{ fontSize: 10, fontFamily: 'monospace' }} stroke="#a3a3a3" />
-                      <Tooltip contentStyle={{ fontFamily: 'monospace', fontSize: 12 }}
-                        formatter={(v) => [`${Number(v).toFixed(2)} °C`, 'Temperatura']} />
-                      <Line type="monotone" dataKey="valor" stroke="#e74c3c" strokeWidth={2.5}
-                        dot={{ r: 4, fill: '#fff', strokeWidth: 2, stroke: '#e74c3c' }}
-                        activeDot={{ r: 6 }} />
+                      <XAxis
+                        dataKey="hora"
+                        tick={{ fontSize: 10, fontFamily: 'monospace' }}
+                        stroke="#a3a3a3"
+                        interval="preserveStartEnd"
+                      />
+                      <YAxis
+                        domain={['dataMin - 2', 'dataMax + 2']}
+                        tick={{ fontSize: 10, fontFamily: 'monospace' }}
+                        stroke="#a3a3a3"
+                      />
+                      <Tooltip
+                        contentStyle={{ fontFamily: 'monospace', fontSize: 12 }}
+                        formatter={(v) => [`${Number(v ?? 0).toFixed(2)} °C`, 'Temperatura']}
+                      />
+                      <ReferenceLine y={-18} stroke="#ef4444" strokeDasharray="6 3" strokeWidth={1.5}
+                        label={{ value: '-18°C Limite', position: 'insideTopRight', fill: '#ef4444', fontSize: 10, fontFamily: 'monospace' }}
+                      />
+                      <ReferenceLine y={-24} stroke="#3b82f6" strokeDasharray="6 3" strokeWidth={1.5}
+                        label={{ value: '-24°C Optimo', position: 'insideTopLeft', fill: '#3b82f6', fontSize: 10, fontFamily: 'monospace' }}
+                      />
+                      <Line
+                        type="monotone"
+                        dataKey="valor"
+                        stroke="#e74c3c"
+                        strokeWidth={2}
+                        dot={{ r: 2, fill: '#e74c3c', strokeWidth: 0 }}
+                        activeDot={{ r: 5, fill: '#fff', strokeWidth: 2, stroke: '#e74c3c' }}
+                      />
                     </LineChart>
                   </ResponsiveContainer>
                 ) : (
@@ -379,8 +478,36 @@ export default function TemperatureMonitor() {
               </div>
             </div>
 
+            {/* Leyenda de colores */}
+            <div className="bg-white border border-neutral-200 rounded-lg p-4 mb-4">
+              <h3 className="text-xs font-mono uppercase tracking-widest text-neutral-700 mb-3 flex items-center gap-2">
+                <Info className="w-3.5 h-3.5" />
+                Leyenda de estados
+              </h3>
+              <div className="flex flex-wrap gap-6">
+                <div className="flex items-center gap-2">
+                  <span className="w-4 h-4 rounded-full bg-blue-500 border border-blue-600"></span>
+                  <span className="text-xs font-mono text-neutral-600">
+                    Frio (&lt; -24°C) — Temperatura excesivamente baja
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="w-4 h-4 rounded-full bg-green-500 border border-green-600"></span>
+                  <span className="text-xs font-mono text-neutral-600">
+                    Normal (-24°C a -18°C) — Rango operativo correcto
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="w-4 h-4 rounded-full bg-red-500 border border-red-600"></span>
+                  <span className="text-xs font-mono text-neutral-600">
+                    Calor (&gt; -18°C) — Temperatura por encima del limite
+                  </span>
+                </div>
+              </div>
+            </div>
+
             {/* Tabla de registros */}
-            <div className="bg-white border border-neutral-200 rounded-lg overflow-hidden">
+            <div className="bg-white border border-neutral-200 rounded-lg overflow-hidden mb-4">
               <div className="bg-neutral-800 text-white px-4 py-3 flex items-center justify-between">
                 <h3 className="text-sm font-mono uppercase tracking-widest">
                   Registros de Temperatura
@@ -389,7 +516,7 @@ export default function TemperatureMonitor() {
                   {data.temperatures.length} registros
                 </span>
               </div>
-              <div className="overflow-x-auto max-h-[300px] overflow-y-auto">
+              <div className="overflow-x-auto max-h-[400px] overflow-y-auto">
                 <table className="w-full text-sm">
                   <thead className="bg-neutral-700 text-white sticky top-0 z-10">
                     <tr>
@@ -397,11 +524,13 @@ export default function TemperatureMonitor() {
                       <th className="px-4 py-2.5 text-left text-[10px] font-mono uppercase tracking-widest">Fecha</th>
                       <th className="px-4 py-2.5 text-left text-[10px] font-mono uppercase tracking-widest">Hora</th>
                       <th className="px-4 py-2.5 text-right text-[10px] font-mono uppercase tracking-widest">Temperatura</th>
+                      <th className="px-4 py-2.5 text-center text-[10px] font-mono uppercase tracking-widest">Estado</th>
                     </tr>
                   </thead>
                   <tbody>
                     {data.temperatures.map((temp, i) => {
                       const t = parseFloat(temp.temperatura);
+                      const st = tempStatus(t);
                       return (
                         <tr key={i} className="border-b border-neutral-100 hover:bg-neutral-50 transition-colors">
                           <td className="px-4 py-2 font-mono text-xs text-neutral-600">{temp.sensor}</td>
@@ -410,12 +539,17 @@ export default function TemperatureMonitor() {
                           <td className={`px-4 py-2 font-mono text-xs font-bold text-right ${tempColor(t)}`}>
                             {t.toFixed(2)} °C
                           </td>
+                          <td className="px-4 py-2 text-center">
+                            <span className={`inline-block px-2.5 py-0.5 text-[10px] font-mono uppercase tracking-wider rounded-full border ${st.color}`}>
+                              {st.label}
+                            </span>
+                          </td>
                         </tr>
                       );
                     })}
                     {data.temperatures.length === 0 && (
                       <tr>
-                        <td colSpan={4} className="px-4 py-8 text-center text-xs text-neutral-400 font-mono">
+                        <td colSpan={5} className="px-4 py-8 text-center text-xs text-neutral-400 font-mono">
                           No hay registros para el rango seleccionado
                         </td>
                       </tr>
@@ -424,6 +558,39 @@ export default function TemperatureMonitor() {
                 </table>
               </div>
             </div>
+
+            {/* Footer informativo */}
+            {isDemo && (
+              <div className="bg-neutral-50 border border-neutral-200 rounded-lg p-4 mb-4">
+                <h3 className="text-xs font-mono uppercase tracking-widest text-neutral-700 mb-2 flex items-center gap-2">
+                  <Info className="w-3.5 h-3.5" />
+                  Acerca de los datos mostrados
+                </h3>
+                <div className="text-xs text-neutral-500 space-y-2">
+                  <p>
+                    Los datos que se ven en esta pantalla son <strong className="text-neutral-700">simulaciones demo</strong> generadas
+                    automaticamente. Representan lecturas hipoteticas de sensores de temperatura para camaras frigorificas,
+                    con un patron realista que incluye variaciones sinusoidales (simulando ciclos de compresor), ruido aleatorio,
+                    y picos eventuales de temperatura (simulando apertura de puertas).
+                  </p>
+                  <p>
+                    Para ver los <strong className="text-neutral-700">datos reales en tiempo real</strong> de los sensores del
+                    Centro Logistico Frimaral, tiene dos opciones:
+                  </p>
+                  <ul className="list-disc list-inside space-y-1 ml-2">
+                    <li>
+                      Hacer click en <strong className="text-blue-600">Ver datos reales</strong> para abrir directamente el
+                      servidor interno de temperaturas en 192.168.150.31 (requiere estar en la red interna).
+                    </li>
+                    <li>
+                      Ejecutar la aplicacion localmente con <span className="font-mono bg-neutral-800 text-green-300 px-1.5 py-0.5 rounded text-[11px]">npm run dev</span>{' '}
+                      desde la red interna del centro logistico, lo cual habilita el proxy hacia el servidor de sensores
+                      y permite consultar datos en tiempo real con auto-refresh.
+                    </li>
+                  </ul>
+                </div>
+              </div>
+            )}
           </div>
         )}
       </div>
