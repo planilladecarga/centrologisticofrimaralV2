@@ -564,7 +564,7 @@ export default function Pedidos({ inventoryData, onUpdateInventory }: PedidosPro
   ];
   const ACCEPTED_EXT = '.pdf,.jpg,.jpeg,.png,.gif,.webp,.bmp,.xlsx,.xls,.csv';
 
-  // ── AI EXTRACTION (before handleArchivoUpload) ──────
+  // ── AI EXTRACTION (via API route, funciona en npm run dev) ──
 
   const processWithAI = useCallback(async (archivo: ArchivoAdjunto) => {
     setAiProcessing(true);
@@ -604,11 +604,7 @@ export default function Pedidos({ inventoryData, onUpdateInventory }: PedidosPro
       }
     } catch (err: any) {
       console.error('Error en extracción IA:', err);
-      if (err.message?.includes('fetch') || err.message?.includes('Failed')) {
-        setAiError('No se pudo conectar al servidor de IA. Esta función requiere ejecutar la app en modo servidor (npm run dev). No funciona en GitHub Pages estático.');
-      } else {
-        setAiError(err.message || 'Error desconocido al procesar con IA.');
-      }
+      setAiError('No se pudo conectar al servidor. Esta función requiere ejecutar la app con "npm run dev" en la PC (no funciona en GitHub Pages).');
     } finally {
       setAiProcessing(false);
     }
