@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import { GoogleGenAI } from '@google/genai';
 import SearchableDropdown from '../components/SearchableDropdown';
 import ConfirmModal from '../components/ConfirmModal';
 
@@ -188,7 +189,7 @@ export default function Pedidos({ inventoryData, onUpdateInventory }: PedidosPro
   const [archivosAdjuntos, setArchivosAdjuntos] = useState<ArchivoAdjunto[]>([]);
   const archivoInputRef = useRef<HTMLInputElement>(null);
 
-  // AI Extraction state
+  // AI Extraction state (client-side via Google Gemini API)
   const [aiProcessing, setAiProcessing] = useState(false);
   const [aiExtractedItems, setAiExtractedItems] = useState<Array<{
     producto: string;
@@ -203,6 +204,11 @@ export default function Pedidos({ inventoryData, onUpdateInventory }: PedidosPro
   const [aiObservaciones, setAiObservaciones] = useState('');
   const [aiRawText, setAiRawText] = useState('');
   const [showAiPanel, setShowAiPanel] = useState(false);
+  const [geminiApiKey, setGeminiApiKey] = useState(() => {
+    if (typeof window !== 'undefined') return localStorage.getItem('gemini_api_key') || '';
+    return '';
+  });
+  const [showApiKeyInput, setShowApiKeyInput] = useState(false);
 
   // ── Effects ────────────────────────────────────────────
 
@@ -564,9 +570,49 @@ export default function Pedidos({ inventoryData, onUpdateInventory }: PedidosPro
   ];
   const ACCEPTED_EXT = '.pdf,.jpg,.jpeg,.png,.gif,.webp,.bmp,.xlsx,.xls,.csv';
 
-  // ── AI EXTRACTION (via API route, funciona en npm run dev) ──
+  // ── AI EXTRACTION (100% client-side via Google Gemini API) ──
+
+  const saveGeminiKey = useCallback((key: string) => {
+    setGeminiApiKey(key);
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('gemini_api_key', key);
+    }
+  }, []);
+
+  const parseAIResponse = (content: string) => {
+    try {
+      let jsonStr = content.trim();
+      const jsonMatch = jsonStr.match(/```(?:json)?\s*([\s\S]*?)```/);
+      if (jsonMatch) jsonStr = jsonMatch[1].trim();
+      const firstBrace = jsonStr.indexOf('{');
+      const lastBrace = jsonStr.lastIndexOf('}');
+      if (firstBrace !== -1 && lastBrace !== -1) {
+        jsonStr = jsonStr.substring(firstBrace, lastBrace + 1);
+      }
+      const parsed = JSON.parse(jsonStr);
+      if (parsed.error) return { success: false, error: parsed.error, items: [], cliente: '', observaciones: '', rawText: '' };
+      const items = (parsed.items || []).map((item: any) => ({
+        producto: String(item.producto || '').trim(),
+        contenedor: String(item.contenedor || '').trim(),
+        lote: String(item.lote || '').trim(),
+        pallets: Number(item.pallets) || 0,
+        cajas: Number(item.cajas) || 0,
+        kilos: Number(item.kilos) || 0,
+      })).filter((item: any) => item.producto);
+      return { success: true, items, cliente: String(parsed.cliente || '').trim(), observaciones: String(parsed.observaciones || '').trim(), rawText: '' };
+    } catch {
+      return { success: false, error: 'No se pudo interpretar la respuesta de la IA.', items: [], cliente: '', observaciones: '', rawText: '' };
+    }
+  };
 
   const processWithAI = useCallback(async (archivo: ArchivoAdjunto) => {
+    if (!geminiApiKey.trim()) {
+      setShowApiKeyInput(true);
+      setAiError('Configurá tu API Key de Gemini para usar la extracción con IA.');
+      setShowAiPanel(true);
+      return;
+    }
+
     setAiProcessing(true);
     setAiError('');
     setAiExtractedItems([]);
@@ -574,41 +620,116 @@ export default function Pedidos({ inventoryData, onUpdateInventory }: PedidosPro
     setShowAiPanel(true);
 
     try {
-      const response = await fetch('/api/extract-order', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          fileData: archivo.dataUrl,
-          fileName: archivo.nombre,
-          fileType: archivo.tipo,
-        }),
-      });
+      const ai = new GoogleGenAI({ apiKey: geminiApiKey.trim() });
+      const SYSTEM_PROMPT = `Eres un asistente especializado en logística de centro de frio. EXTRAER datos de pedidos desde capturas de emails, PDFs o planillas Excel.
 
-      if (!response.ok) {
-        const errData = await response.json().catch(() => ({}));
-        throw new Error(errData.error || `Error HTTP ${response.status}`);
+CONTEXTO: SADETIR (DYSA 10330) envía pedidos por email con productos y cantidades.
+
+INSTRUCCIONES:
+1. Identifica TODOS los productos mencionados
+2. Extrae cantidades (pallets, cajas, kilos) para cada producto
+3. Si menciona contenedor o lote, extrae los números
+4. El campo "producto" debe ser el nombre exacto como aparece
+5. Si solo se menciona cantidad sin unidad, asumir que son pallets
+
+RESPONDE ÚNICAMENTE con JSON válido, sin markdown ni backticks:
+{"cliente":"","items":[{"producto":"","contenedor":"","lote":"","pallets":0,"cajas":0,"kilos":0}],"observaciones":""}
+
+Si no identifies productos, devuelve items vacío. Si no es un pedido, devuelve {"error":"No se pudo identificar un pedido en el archivo"}.`;
+
+      let result;
+
+      if (archivo.tipo.startsWith('image/')) {
+        // Image: use Gemini multimodal (vision)
+        const base64Data = archivo.dataUrl.replace(/^data:image\/[^;]+;base64,/, '');
+        const mimeType = archivo.tipo || 'image/jpeg';
+        const response = await ai.models.generateContent({
+          model: 'gemini-2.0-flash',
+          contents: [
+            { role: 'user', parts: [
+              { inlineData: { data: base64Data, mimeType } },
+              { text: 'Extrae todos los datos del pedido de esta imagen. Devuelve solo el JSON.' },
+            ]},
+          ],
+          config: { systemInstruction: SYSTEM_PROMPT },
+        });
+        result = parseAIResponse(response.text || '');
+      } else if (archivo.tipo.includes('pdf') || archivo.nombre.endsWith('.pdf')) {
+        // PDF: extract text with pdfjs-dist, then send to Gemini
+        const pdfjsLib = await import('pdfjs-dist');
+        const raw = archivo.dataUrl.replace(/^data:application\/pdf;base64,/, '');
+        const pdfData = Uint8Array.from(atob(raw), c => c.charCodeAt(0));
+        const pdf = await pdfjsLib.getDocument({ data: pdfData }).promise;
+        let fullText = '';
+        for (let i = 1; i <= pdf.numPages; i++) {
+          const page = await pdf.getPage(i);
+          const textContent = await page.getTextContent();
+          fullText += textContent.items.map((item: any) => item.str).join(' ') + '\n';
+        }
+        if (!fullText.trim()) {
+          setAiError('No se pudo extraer texto del PDF. Probá con una captura de pantalla (JPG/PNG).');
+          return;
+        }
+        result = parseAIResponse(fullText);
+        result.rawText = fullText;
+        if (result.success && result.items.length === 0) {
+          // Try with Gemini to interpret the text better
+          const response = await ai.models.generateContent({
+            model: 'gemini-2.0-flash',
+            contents: `Texto extraído del PDF:\n\n${fullText}\n\nExtrae datos del pedido. Solo JSON.`,
+            config: { systemInstruction: SYSTEM_PROMPT },
+          });
+          result = parseAIResponse(response.text || '');
+          result.rawText = fullText;
+        }
+      } else {
+        // Excel/CSV: parse with xlsx, then send to Gemini
+        const XLSX = await import('xlsx');
+        const raw = archivo.dataUrl.replace(/^data:application\/[^;]+;base64,/, '');
+        const bytes = new Uint8Array(raw.length);
+        for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+        const workbook = XLSX.read(bytes, { type: 'array' });
+        const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
+        const data = XLSX.utils.sheet_to_json<any[]>(firstSheet, { defval: '' });
+        if (!data || data.length === 0) {
+          setAiError('El archivo Excel está vacío.');
+          return;
+        }
+        const textRep = data.map((row, idx) =>
+          `Fila ${idx + 1}: ${Object.entries(row).map(([k, v]) => `${k}=${v}`).join(', ')}`
+        ).join('\n');
+        const response = await ai.models.generateContent({
+          model: 'gemini-2.0-flash',
+          contents: `Datos del Excel:\n\n${textRep}\n\nExtrae datos del pedido. Solo JSON.`,
+          config: { systemInstruction: SYSTEM_PROMPT },
+        });
+        result = parseAIResponse(response.text || '');
+        result.rawText = textRep;
       }
 
-      const data = await response.json();
-
-      if (data.success && data.items && data.items.length > 0) {
-        setAiExtractedItems(data.items);
-        setAiClientName(data.cliente || '');
-        setAiObservaciones(data.observaciones || '');
-        setAiRawText(data.rawText || '');
-        showToast(`${data.items.length} producto(s) extraído(s) con IA. Revisá y confirmá.`);
-      } else if (data.success && (!data.items || data.items.length === 0)) {
+      if (result.success && result.items.length > 0) {
+        setAiExtractedItems(result.items);
+        setAiClientName(result.cliente || '');
+        setAiObservaciones(result.observaciones || '');
+        setAiRawText(result.rawText || '');
+        showToast(`${result.items.length} producto(s) extraído(s) con IA. Revisá y confirmá.`);
+      } else if (result.success && result.items.length === 0) {
         setAiError('La IA no pudo identificar productos en el archivo. Probá con una captura más clara del email.');
       } else {
-        setAiError(data.error || 'No se pudo extraer información del archivo.');
+        setAiError(result.error || 'No se pudo extraer información del archivo.');
       }
     } catch (err: any) {
       console.error('Error en extracción IA:', err);
-      setAiError('No se pudo conectar al servidor. Esta función requiere ejecutar la app con "npm run dev" en la PC (no funciona en GitHub Pages).');
+      if (err.message?.includes('API_KEY') || err.message?.includes('401') || err.message?.includes('403')) {
+        setAiError('API Key inválida. Verificá que la clave sea correcta en Configuración IA.');
+        setShowApiKeyInput(true);
+      } else {
+        setAiError(`Error de IA: ${err.message || 'Error desconocido'}`);
+      }
     } finally {
       setAiProcessing(false);
     }
-  }, [showToast]);
+  }, [geminiApiKey, showToast]);
 
   const confirmAiExtraction = useCallback(() => {
     if (aiExtractedItems.length === 0) return;
@@ -1491,7 +1612,53 @@ export default function Pedidos({ inventoryData, onUpdateInventory }: PedidosPro
                 <span className="text-[10px] font-mono text-neutral-400 uppercase tracking-widest">
                   Max 4MB · IA Lee y Extrae el Pedido
                 </span>
+                {/* API Key config button */}
+                <button
+                  type="button"
+                  onClick={() => setShowApiKeyInput(!showApiKeyInput)}
+                  className={`ml-auto px-2 py-1 text-[9px] font-mono uppercase tracking-widest border transition-colors ${geminiApiKey ? 'bg-emerald-50 text-emerald-600 border-emerald-200' : 'bg-amber-50 text-amber-600 border-amber-200'}`}
+                >
+                  {geminiApiKey ? '✓ IA Configurada' : '🔑 Configurar IA'}
+                </button>
               </div>
+
+              {/* Gemini API Key configuration panel */}
+              {showApiKeyInput && (
+                <div className="mt-3 border border-neutral-200 bg-white p-4">
+                  <div className="flex items-center justify-between mb-2">
+                    <p className="text-[10px] font-mono font-bold text-neutral-900 uppercase tracking-widest">
+                      API Key de Google Gemini
+                    </p>
+                    <button type="button" onClick={() => setShowApiKeyInput(false)} className="text-neutral-400 hover:text-neutral-600 text-xs">✕</button>
+                  </div>
+                  <p className="text-[9px] font-mono text-neutral-500 mb-3 leading-relaxed">
+                    Necesitás una clave API de Google AI Studio para extraer pedidos con IA.
+                    Obtené una gratis en{' '}
+                    <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener noreferrer" className="text-blue-600 underline">
+                      aistudio.google.com/apikey
+                    </a>
+                    {' '}— Se guarda solo en tu navegador (localStorage).
+                  </p>
+                  <div className="flex gap-2">
+                    <input
+                      type="password"
+                      value={geminiApiKey}
+                      onChange={(e) => saveGeminiKey(e.target.value)}
+                      placeholder="AIza..."
+                      className="flex-1 px-3 py-1.5 text-[11px] font-mono border border-neutral-200 bg-neutral-50 focus:outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-100 rounded"
+                    />
+                    {geminiApiKey && (
+                      <button
+                        type="button"
+                        onClick={() => saveGeminiKey('')}
+                        className="px-3 py-1.5 text-[9px] font-mono uppercase tracking-widest text-red-600 border border-red-200 bg-red-50 hover:bg-red-100 transition-colors"
+                      >
+                        Borrar
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
 
               {/* Preview de archivos adjuntos */}
               {archivosAdjuntos.length > 0 && (
@@ -1524,10 +1691,10 @@ export default function Pedidos({ inventoryData, onUpdateInventory }: PedidosPro
                         type="button"
                         onClick={() => processWithAI(archivo)}
                         disabled={aiProcessing}
-                        className="px-2 py-1 text-[9px] font-mono uppercase tracking-widest bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100 transition-colors disabled:opacity-50"
-                        title="Extraer datos con IA (requiere npm run dev - no funciona en GitHub Pages)"
+                        className={`px-2 py-1 text-[9px] font-mono uppercase tracking-widest border transition-colors disabled:opacity-50 ${geminiApiKey ? 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100' : 'bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100'}`}
+                        title={!geminiApiKey ? 'Configurá API Key primero' : 'Extraer datos con IA (Gemini)'}
                       >
-                        IA
+                        {geminiApiKey ? 'IA' : 'IA 🔑'}
                       </button>
                       <button
                         type="button"
