@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import SearchableDropdown from '../components/SearchableDropdown';
 import ConfirmModal from '../components/ConfirmModal';
 
@@ -36,6 +36,13 @@ interface CartItem extends OrderItem {
   maxKilos: number;
 }
 
+interface ArchivoAdjunto {
+  nombre: string;
+  tipo: string;
+  tamanio: number;
+  dataUrl: string;
+}
+
 interface Order {
   id: string;
   numero: string;
@@ -45,6 +52,7 @@ interface Order {
   reservedItems?: ReservedItem[];
   observaciones: string;
   operador?: string;
+  archivosAdjuntos?: ArchivoAdjunto[];
   createdAt: string;
   updatedAt: string;
 }
@@ -175,6 +183,10 @@ export default function Pedidos({ inventoryData, onUpdateInventory }: PedidosPro
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
   const [statusConfirm, setStatusConfirm] = useState<{ orderId: string; newStatus: string } | null>(null);
   const [toast, setToast] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
+
+  // Adjuntos
+  const [archivosAdjuntos, setArchivosAdjuntos] = useState<ArchivoAdjunto[]>([]);
+  const archivoInputRef = useRef<HTMLInputElement>(null);
 
   // ── Effects ────────────────────────────────────────────
 
@@ -373,6 +385,7 @@ export default function Pedidos({ inventoryData, onUpdateInventory }: PedidosPro
     setAddPallets('');
     setAddCajas('');
     setAddKilos('');
+    setArchivosAdjuntos([]);
   }, []);
 
   const addToCart = useCallback(() => {
@@ -504,6 +517,7 @@ export default function Pedidos({ inventoryData, onUpdateInventory }: PedidosPro
       })),
       observaciones: observaciones.trim().toUpperCase(),
       operador: operatorName || undefined,
+      archivosAdjuntos: archivosAdjuntos.length > 0 ? archivosAdjuntos : undefined,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
@@ -513,7 +527,86 @@ export default function Pedidos({ inventoryData, onUpdateInventory }: PedidosPro
     setView('detail');
     clearForm();
     showToast(`Pedido ${newOrder.numero} creado exitosamente.`);
-  }, [cart, selClient, observaciones, operatorName, orders, clearForm, showToast]);
+  }, [cart, selClient, observaciones, operatorName, orders, archivosAdjuntos, clearForm, showToast]);
+
+  // ── ADJUNTAR ARCHIVOS ───────────────────────────────
+
+  const MAX_FILE_SIZE = 4 * 1024 * 1024; // 4MB max por archivo
+  const ACCEPTED_TYPES = [
+    'application/pdf',
+    'image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/bmp',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    'application/vnd.ms-excel',
+    'text/csv',
+  ];
+  const ACCEPTED_EXT = '.pdf,.jpg,.jpeg,.png,.gif,.webp,.bmp,.xlsx,.xls,.csv';
+
+  const handleArchivoUpload = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+
+    const newArchivos: ArchivoAdjunto[] = [];
+    let errorCount = 0;
+
+    Array.from(files).forEach(file => {
+      if (!ACCEPTED_TYPES.includes(file.type) && !ACCEPTED_EXT.includes(file.name.substring(file.name.lastIndexOf('.')).toLowerCase())) {
+        errorCount++;
+        return;
+      }
+      if (file.size > MAX_FILE_SIZE) {
+        errorCount++;
+        return;
+      }
+
+      const reader = new FileReader();
+      reader.onload = (evt) => {
+        const dataUrl = evt.target?.result as string;
+        const archivo: ArchivoAdjunto = {
+          nombre: file.name,
+          tipo: file.type,
+          tamanio: file.size,
+          dataUrl,
+        };
+        setArchivosAdjuntos(prev => {
+          // Evitar duplicados por nombre
+          if (prev.some(a => a.nombre === archivo.nombre)) return prev;
+          return [...prev, archivo];
+        });
+      };
+      reader.readAsDataURL(file);
+    });
+
+    if (errorCount > 0) {
+      showToast(`${errorCount} archivo(s) rechazado(s). Max 4MB, formatos: PDF, JPG, PNG, Excel, CSV.`, 'error');
+    }
+
+    // Reset input
+    if (archivoInputRef.current) archivoInputRef.current.value = '';
+  }, [showToast]);
+
+  const removeArchivo = useCallback((nombre: string) => {
+    setArchivosAdjuntos(prev => prev.filter(a => a.nombre !== nombre));
+  }, []);
+
+  const formatFileSize = (bytes: number) => {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  };
+
+  const getFileIcon = (tipo: string) => {
+    if (tipo.startsWith('image/')) return 'IMG';
+    if (tipo.includes('pdf')) return 'PDF';
+    if (tipo.includes('sheet') || tipo.includes('excel') || tipo.includes('csv')) return 'XLS';
+    return 'FILE';
+  };
+
+  const getFileColor = (tipo: string) => {
+    if (tipo.startsWith('image/')) return 'bg-emerald-100 text-emerald-700 border-emerald-200';
+    if (tipo.includes('pdf')) return 'bg-red-100 text-red-700 border-red-200';
+    if (tipo.includes('sheet') || tipo.includes('excel') || tipo.includes('csv')) return 'bg-blue-100 text-blue-700 border-blue-200';
+    return 'bg-neutral-100 text-neutral-700 border-neutral-200';
+  };
 
   // ── REMITO DE DOS VÍAS ──────────────────────────────────
 
@@ -1207,6 +1300,78 @@ export default function Pedidos({ inventoryData, onUpdateInventory }: PedidosPro
               )}
             </div>
 
+            {/* Adjuntar archivo del pedido */}
+            <div>
+              <label className="block text-[10px] font-mono uppercase tracking-widest text-neutral-500 mb-2">
+                Archivo del Pedido (Email / Captura / Documento)
+              </label>
+              <input
+                type="file"
+                ref={archivoInputRef}
+                onChange={handleArchivoUpload}
+                accept={ACCEPTED_EXT}
+                multiple
+                className="hidden"
+              />
+              <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => archivoInputRef.current?.click()}
+                  className="px-4 py-2 text-[10px] font-mono uppercase tracking-widest bg-neutral-900 text-white hover:bg-neutral-800 transition-colors flex items-center gap-2"
+                >
+                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
+                  </svg>
+                  Subir PDF / Excel / JPG
+                </button>
+                <span className="text-[10px] font-mono text-neutral-400 uppercase tracking-widest">
+                  Max 4MB por archivo
+                </span>
+              </div>
+
+              {/* Preview de archivos adjuntos */}
+              {archivosAdjuntos.length > 0 && (
+                <div className="mt-3 space-y-2">
+                  {archivosAdjuntos.map((archivo, idx) => (
+                    <div key={`${archivo.nombre}-${idx}`} className="border border-neutral-200 bg-white p-3 flex items-center gap-3">
+                      {/* Thumbnail para imagenes */}
+                      {archivo.tipo.startsWith('image/') ? (
+                        <div className="w-12 h-12 rounded border border-neutral-200 overflow-hidden flex-shrink-0 bg-neutral-50">
+                          <img
+                            src={archivo.dataUrl}
+                            alt={archivo.nombre}
+                            className="w-full h-full object-cover"
+                          />
+                        </div>
+                      ) : (
+                        <div className={`w-12 h-12 rounded border flex items-center justify-center text-[9px] font-mono font-bold flex-shrink-0 ${getFileColor(archivo.tipo)}`}>
+                          {getFileIcon(archivo.tipo)}
+                        </div>
+                      )}
+                      <div className="flex-1 min-w-0">
+                        <p className="text-[11px] font-mono font-medium text-neutral-900 truncate">
+                          {archivo.nombre}
+                        </p>
+                        <p className="text-[9px] font-mono text-neutral-400 uppercase">
+                          {formatFileSize(archivo.tamanio)}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => removeArchivo(archivo.nombre)}
+                        className="text-neutral-400 hover:text-red-600 transition-colors text-sm leading-none shrink-0 p-1"
+                        title="Eliminar archivo"
+                      >
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
             {/* Observations */}
             <div>
               <label className="block text-[10px] font-mono uppercase tracking-widest text-neutral-500 mb-2">
@@ -1529,6 +1694,53 @@ export default function Pedidos({ inventoryData, onUpdateInventory }: PedidosPro
                 Observaciones
               </h3>
               <p className="text-xs font-mono text-neutral-600 leading-relaxed">{order.observaciones}</p>
+            </div>
+          )}
+
+          {/* Archivos adjuntos */}
+          {order.archivosAdjuntos && order.archivosAdjuntos.length > 0 && (
+            <div className="bg-white border border-neutral-200 p-6">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-xs font-mono uppercase tracking-widest text-neutral-900">
+                  Archivos Adjuntos ({order.archivosAdjuntos.length})
+                </h3>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                {order.archivosAdjuntos.map((archivo, idx) => (
+                  <a
+                    key={`${archivo.nombre}-${idx}`}
+                    href={archivo.dataUrl}
+                    download={archivo.nombre}
+                    className="border border-neutral-200 hover:border-neutral-400 p-3 flex items-center gap-3 transition-colors cursor-pointer group"
+                    title={`Descargar ${archivo.nombre}`}
+                  >
+                    {archivo.tipo.startsWith('image/') ? (
+                      <div className="w-14 h-14 rounded border border-neutral-200 overflow-hidden flex-shrink-0 bg-neutral-50">
+                        <img
+                          src={archivo.dataUrl}
+                          alt={archivo.nombre}
+                          className="w-full h-full object-cover"
+                        />
+                      </div>
+                    ) : (
+                      <div className={`w-14 h-14 rounded border flex items-center justify-center text-[10px] font-mono font-bold flex-shrink-0 ${getFileColor(archivo.tipo)}`}>
+                        {getFileIcon(archivo.tipo)}
+                      </div>
+                    )}
+                    <div className="flex-1 min-w-0">
+                      <p className="text-[11px] font-mono font-medium text-neutral-900 truncate group-hover:text-blue-600 transition-colors">
+                        {archivo.nombre}
+                      </p>
+                      <p className="text-[9px] font-mono text-neutral-400 uppercase">
+                        {formatFileSize(archivo.tamanio)}
+                      </p>
+                      <p className="text-[9px] font-mono text-blue-500 uppercase mt-0.5 group-hover:underline">
+                        Descargar
+                      </p>
+                    </div>
+                  </a>
+                ))}
+              </div>
             </div>
           )}
 
