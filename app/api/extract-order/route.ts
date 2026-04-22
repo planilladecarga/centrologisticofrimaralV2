@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from 'next/server';
 // ═══════════════════════════════════════════════════════════
 // API: EXTRAER DATOS DE PEDIDO DESDE EMAIL/ARCHIVO
 // Usa z-ai-web-dev-sdk (VLM + Chat) para leer el contenido
+// El SDK es opcional - si no está disponible devuelve error claro
 // ═══════════════════════════════════════════════════════════
 
 interface ExtractedItem {
@@ -23,87 +24,71 @@ interface ExtractResponse {
   error?: string;
 }
 
-async function extractFromImage(base64Data: string): Promise<ExtractResponse> {
+// Helper: get ZAI SDK instance (lazy, with error handling)
+async function getZAI(): Promise<any> {
   try {
-    // Dynamic import to avoid issues with static export
-    const ZAI = (await import('z-ai-web-dev-sdk')).default;
-    const zai = await ZAI.create();
-
-    // Remove data URL prefix if present
-    const base64 = base64Data.replace(/^data:image\/[^;]+;base64,/, '');
-
-    const completion = await zai.chat.completions.create({
-      messages: [
-        {
-          role: 'system',
-          content: `Eres un asistente especializado en logística de centro de frio. Tu tarea es EXTRAER datos de pedidos desde capturas de emails.
-
-CONTEXTO: Trabajamos con SADETIR (DYSA 10330), un cliente que envía pedidos por email. Los emails pueden contener:
-- Listas de productos con cantidades (pallets, cajas, kilos)
-- Números de contenedor
-- Números de lote
-- Referencias a productos congelados
-
-INSTRUCCIONES:
-1. Identifica TODOS los productos mencionados en el email/captura
-2. Extrae las cantidades pedidas (pallets, cajas, kilos) para cada producto
-3. Si menciona un contenedor, extrae el número
-4. Si menciona un lote, extrae el número
-5. El campo "producto" debe ser el nombre del producto exactamente como aparece
-
-RESPONDE ÚNICAMENTE con un JSON válido, sin texto adicional, sin markdown:
-{
-  "cliente": "nombre del cliente si se menciona, o vacío",
-  "items": [
-    {
-      "producto": "nombre del producto",
-      "contenedor": "número de contenedor si se menciona, o vacío",
-      "lote": "número de lote si se menciona, o vacío",
-      "pallets": 0,
-      "cajas": 0,
-      "kilos": 0
-    }
-  ],
-  "observaciones": "cualquier nota adicional del email"
+    const mod = await import('z-ai-web-dev-sdk');
+    const ZAI = mod.default || mod;
+    return await ZAI.create();
+  } catch {
+    return null;
+  }
 }
 
-Si no puedes identificar productos o cantidades, devuelve items vacío. Si la imagen no es un pedido, devuelve {"error": "No se pudo identificar un pedido en la imagen"}.
-Si el email menciona productos pero no cantidades específicas, pon pallets: 1 y cajas/kilos: 0 como valor por defecto.`,
-        },
-        {
-          role: 'user',
-          // @ts-expect-error - VLM multimodal content with image
-          content: [
-            {
-              type: 'image_url',
-              image_url: {
-                url: `data:image/jpeg;base64,${base64}`,
-              },
-            },
-            {
-              type: 'text',
-              text: 'Extrae todos los datos del pedido de este email/captura. Devuelve solo el JSON.',
-            },
-          ],
-        },
-      ],
-    });
+// Helper: call AI chat completion
+async function callAI(zai: any, messages: any): Promise<string> {
+  const completion = await zai.chat.completions.create({ messages });
+  return completion.choices?.[0]?.message?.content || '';
+}
 
-    const content = completion.choices?.[0]?.message?.content || '';
+async function extractFromImage(base64Data: string): Promise<ExtractResponse> {
+  const zai = await getZAI();
+  if (!zai) {
+    return { success: false, error: 'SDK de IA no disponible. Ejecutá la app con npm run dev (modo servidor).' };
+  }
+
+  try {
+    const base64 = base64Data.replace(/^data:image\/[^;]+;base64,/, '');
+
+    const content = await callAI(zai, [
+      {
+        role: 'system',
+        content: `Eres un asistente especializado en logística de centro de frio. EXTRAER datos de pedidos desde capturas de emails.
+
+CONTEXTO: SADETIR (DYSA 10330) envía pedidos por email con productos y cantidades.
+
+INSTRUCCIONES:
+1. Identifica TODOS los productos mencionados
+2. Extrae cantidades (pallets, cajas, kilos) para cada producto
+3. Si menciona contenedor o lote, extrae los números
+4. El campo "producto" debe ser el nombre exacto como aparece
+
+RESPONDE ÚNICAMENTE con JSON válido, sin markdown:
+{"cliente":"","items":[{"producto":"","contenedor":"","lote":"","pallets":0,"cajas":0,"kilos":0}],"observaciones":""}
+
+Si no identifies productos, devuelve items vacío. Si no es un pedido, devuelve {"error":"No se pudo identificar un pedido en la imagen"}.`,
+      },
+      {
+        role: 'user',
+        content: [
+          { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${base64}` } },
+          { type: 'text', text: 'Extrae todos los datos del pedido. Devuelve solo el JSON.' },
+        ],
+      },
+    ] as any);
+
     return parseAIResponse(content);
   } catch (error: any) {
-    console.error('Error en VLM:', error);
     return { success: false, error: `Error al analizar la imagen: ${error.message}` };
   }
 }
 
 async function extractFromPdf(base64Data: string): Promise<ExtractResponse> {
   try {
-    // Extract text from PDF using pdfjs-dist
+    // Extract text from PDF
     const pdfjsLib = await import('pdfjs-dist');
-
-    // Set worker
-    const pdfData = Uint8Array.from(atob(base64Data.replace(/^data:application\/pdf;base64,/, '')), c => c.charCodeAt(0));
+    const raw = base64Data.replace(/^data:application\/pdf;base64,/, '');
+    const pdfData = Uint8Array.from(atob(raw), c => c.charCodeAt(0));
     const pdf = await pdfjsLib.getDocument({ data: pdfData }).promise;
 
     let fullText = '';
@@ -118,49 +103,31 @@ async function extractFromPdf(base64Data: string): Promise<ExtractResponse> {
       return { success: false, error: 'No se pudo extraer texto del PDF' };
     }
 
-    // Use AI to parse the extracted text
-    const ZAI = (await import('z-ai-web-dev-sdk')).default;
-    const zai = await ZAI.create();
-
-    const completion = await zai.chat.completions.create({
-      messages: [
-        {
-          role: 'system',
-          content: `Eres un asistente especializado en logística. EXTRAER datos de pedidos desde texto extraído de un PDF/email.
-
-CONTEXTO: Trabajamos con SADETIR (DYSA 10330), cliente que envía pedidos por email con archivos PDF adjuntos.
-
-RESPONDE ÚNICAMENTE con un JSON válido:
-{
-  "cliente": "nombre del cliente",
-  "items": [
-    {
-      "producto": "nombre del producto",
-      "contenedor": "número si se menciona",
-      "lote": "número si se menciona",
-      "pallets": 0,
-      "cajas": 0,
-      "kilos": 0
+    const zai = await getZAI();
+    if (!zai) {
+      return { success: false, error: 'SDK de IA no disponible. Se extrajo texto del PDF pero no se pudo interpretar automáticamente.' };
     }
-  ],
-  "observaciones": "notas adicionales"
-}
 
-Si no puedes identificar productos, devuelve items vacío. Si no es un pedido, devuelve {"error": "No se pudo identificar un pedido"}.`,
-        },
-        {
-          role: 'user',
-          content: `Texto extraído del PDF:\n\n${fullText}\n\nExtrae todos los datos del pedido. Devuelve solo el JSON.`,
-        },
-      ],
-    });
+    const content = await callAI(zai, [
+      {
+        role: 'system',
+        content: `Eres un asistente de logística. EXTRAER datos de pedidos desde texto de PDF. CONTEXTO: SADETIR (DYSA 10330).
 
-    const content = completion.choices?.[0]?.message?.content || '';
+RESPONDE ÚNICAMENTE con JSON válido:
+{"cliente":"","items":[{"producto":"","contenedor":"","lote":"","pallets":0,"cajas":0,"kilos":0}],"observaciones":""}
+
+Si no identifies productos, devuelve items vacío.`,
+      },
+      {
+        role: 'user',
+        content: `Texto del PDF:\n\n${fullText}\n\nExtrae datos del pedido. Solo JSON.`,
+      },
+    ]);
+
     const result = parseAIResponse(content);
     result.rawText = fullText;
     return result;
   } catch (error: any) {
-    console.error('Error procesando PDF:', error);
     return { success: false, error: `Error al procesar el PDF: ${error.message}` };
   }
 }
@@ -168,12 +135,9 @@ Si no puedes identificar productos, devuelve items vacío. Si no es un pedido, d
 async function extractFromExcel(base64Data: string): Promise<ExtractResponse> {
   try {
     const XLSX = await import('xlsx');
-
-    const binaryStr = atob(base64Data.replace(/^data:application\/[^;]+;base64,/, ''));
-    const bytes = new Uint8Array(binaryStr.length);
-    for (let i = 0; i < binaryStr.length; i++) {
-      bytes[i] = binaryStr.charCodeAt(i);
-    }
+    const raw = base64Data.replace(/^data:application\/[^;]+;base64,/, '');
+    const bytes = new Uint8Array(raw.length);
+    for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
 
     const workbook = XLSX.read(bytes, { type: 'array' });
     const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
@@ -183,67 +147,46 @@ async function extractFromExcel(base64Data: string): Promise<ExtractResponse> {
       return { success: false, error: 'El archivo Excel está vacío' };
     }
 
-    // Try to parse the Excel data with AI
     const textRepresentation = data.map((row, idx) =>
       `Fila ${idx + 1}: ${Object.entries(row).map(([k, v]) => `${k}=${v}`).join(', ')}`
     ).join('\n');
 
-    const ZAI = (await import('z-ai-web-dev-sdk')).default;
-    const zai = await ZAI.create();
-
-    const completion = await zai.chat.completions.create({
-      messages: [
-        {
-          role: 'system',
-          content: `Eres un asistente de logística. EXTRAER datos de pedidos desde datos de Excel.
-
-Los datos del Excel pueden contener columnas como: producto, contenedor, lote, pallets, cajas, kilos, bultos, peso, cantidad, etc.
-
-RESPONDE ÚNICAMENTE con un JSON válido:
-{
-  "cliente": "nombre del cliente si se menciona",
-  "items": [
-    {
-      "producto": "nombre del producto",
-      "contenedor": "número si existe",
-      "lote": "número si existe",
-      "pallets": 0,
-      "cajas": 0,
-      "kilos": 0
+    const zai = await getZAI();
+    if (!zai) {
+      return { success: false, error: 'SDK de IA no disponible. Se leyó el Excel pero no se pudo interpretar automáticamente.' };
     }
-  ],
-  "observaciones": "notas adicionales"
-}`,
-        },
-        {
-          role: 'user',
-          content: `Datos del Excel:\n\n${textRepresentation}\n\nExtrae todos los datos del pedido. Devuelve solo el JSON.`,
-        },
-      ],
-    });
 
-    const content = completion.choices?.[0]?.message?.content || '';
+    const content = await callAI(zai, [
+      {
+        role: 'system',
+        content: `Eres un asistente de logística. EXTRAER datos de pedidos desde datos de Excel.
+
+Columnas posibles: producto, contenedor, lote, pallets, cajas, kilos, bultos, peso, cantidad.
+
+RESPONDE ÚNICAMENTE con JSON válido:
+{"cliente":"","items":[{"producto":"","contenedor":"","lote":"","pallets":0,"cajas":0,"kilos":0}],"observaciones":""}`,
+      },
+      {
+        role: 'user',
+        content: `Datos del Excel:\n\n${textRepresentation}\n\nExtrae datos del pedido. Solo JSON.`,
+      },
+    ]);
+
     const result = parseAIResponse(content);
     result.rawText = textRepresentation;
     return result;
   } catch (error: any) {
-    console.error('Error procesando Excel:', error);
     return { success: false, error: `Error al procesar el Excel: ${error.message}` };
   }
 }
 
 function parseAIResponse(content: string): ExtractResponse {
   try {
-    // Try to extract JSON from the response
     let jsonStr = content.trim();
 
-    // Remove markdown code blocks if present
     const jsonMatch = jsonStr.match(/```(?:json)?\s*([\s\S]*?)```/);
-    if (jsonMatch) {
-      jsonStr = jsonMatch[1].trim();
-    }
+    if (jsonMatch) jsonStr = jsonMatch[1].trim();
 
-    // Find JSON object in the string
     const firstBrace = jsonStr.indexOf('{');
     const lastBrace = jsonStr.lastIndexOf('}');
     if (firstBrace !== -1 && lastBrace !== -1) {
@@ -271,9 +214,8 @@ function parseAIResponse(content: string): ExtractResponse {
       cliente: String(parsed.cliente || '').trim(),
       observaciones: String(parsed.observaciones || '').trim(),
     };
-  } catch (e) {
-    console.error('Error parsing AI response:', content, e);
-    return { success: false, error: 'No se pudo interpretar la respuesta de la IA. Intente con otro archivo.' };
+  } catch {
+    return { success: false, error: 'No se pudo interpretar la respuesta de la IA.' };
   }
 }
 
@@ -295,12 +237,11 @@ export async function POST(request: NextRequest) {
     } else if (fileType?.includes('sheet') || fileType?.includes('excel') || fileType?.includes('csv') || /\.(xlsx?|csv)$/i.test(fileName)) {
       result = await extractFromExcel(fileData);
     } else {
-      return NextResponse.json({ success: false, error: 'Formato de archivo no soportado. Use PDF, JPG, PNG o Excel.' }, { status: 400 });
+      return NextResponse.json({ success: false, error: 'Formato no soportado. Use PDF, JPG, PNG o Excel.' }, { status: 400 });
     }
 
     return NextResponse.json(result);
   } catch (error: any) {
-    console.error('Error en /api/extract-order:', error);
     return NextResponse.json({ success: false, error: `Error del servidor: ${error.message}` }, { status: 500 });
   }
 }

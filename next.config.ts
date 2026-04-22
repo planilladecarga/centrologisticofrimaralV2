@@ -23,6 +23,7 @@ const nextConfig: NextConfig = {
   output: process.env.GITHUB_ACTIONS ? 'export' : undefined,
   basePath: process.env.GITHUB_ACTIONS ? '/centrologisticofrimaralV2' : undefined,
   transpilePackages: ['motion'],
+  serverExternalPackages: ['z-ai-web-dev-sdk'],
   // Proxy local para temperaturas (solo funciona en modo servidor, no en static export)
   async rewrites() {
     if (process.env.GITHUB_ACTIONS) return [];
