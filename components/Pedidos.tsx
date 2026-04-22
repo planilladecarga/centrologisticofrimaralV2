@@ -188,6 +188,22 @@ export default function Pedidos({ inventoryData, onUpdateInventory }: PedidosPro
   const [archivosAdjuntos, setArchivosAdjuntos] = useState<ArchivoAdjunto[]>([]);
   const archivoInputRef = useRef<HTMLInputElement>(null);
 
+  // AI Extraction state
+  const [aiProcessing, setAiProcessing] = useState(false);
+  const [aiExtractedItems, setAiExtractedItems] = useState<Array<{
+    producto: string;
+    contenedor: string;
+    lote: string;
+    pallets: number;
+    cajas: number;
+    kilos: number;
+  }>>([]);
+  const [aiError, setAiError] = useState('');
+  const [aiClientName, setAiClientName] = useState('');
+  const [aiObservaciones, setAiObservaciones] = useState('');
+  const [aiRawText, setAiRawText] = useState('');
+  const [showAiPanel, setShowAiPanel] = useState(false);
+
   // ── Effects ────────────────────────────────────────────
 
   useEffect(() => {
@@ -386,6 +402,13 @@ export default function Pedidos({ inventoryData, onUpdateInventory }: PedidosPro
     setAddCajas('');
     setAddKilos('');
     setArchivosAdjuntos([]);
+    setAiProcessing(false);
+    setAiExtractedItems([]);
+    setAiError('');
+    setAiClientName('');
+    setAiObservaciones('');
+    setAiRawText('');
+    setShowAiPanel(false);
   }, []);
 
   const addToCart = useCallback(() => {
@@ -541,11 +564,154 @@ export default function Pedidos({ inventoryData, onUpdateInventory }: PedidosPro
   ];
   const ACCEPTED_EXT = '.pdf,.jpg,.jpeg,.png,.gif,.webp,.bmp,.xlsx,.xls,.csv';
 
+  // ── AI EXTRACTION (before handleArchivoUpload) ──────
+
+  const processWithAI = useCallback(async (archivo: ArchivoAdjunto) => {
+    setAiProcessing(true);
+    setAiError('');
+    setAiExtractedItems([]);
+    setAiRawText('');
+    setShowAiPanel(true);
+
+    try {
+      const response = await fetch('/api/extract-order', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          fileData: archivo.dataUrl,
+          fileName: archivo.nombre,
+          fileType: archivo.tipo,
+        }),
+      });
+
+      if (!response.ok) {
+        const errData = await response.json().catch(() => ({}));
+        throw new Error(errData.error || `Error HTTP ${response.status}`);
+      }
+
+      const data = await response.json();
+
+      if (data.success && data.items && data.items.length > 0) {
+        setAiExtractedItems(data.items);
+        setAiClientName(data.cliente || '');
+        setAiObservaciones(data.observaciones || '');
+        setAiRawText(data.rawText || '');
+        showToast(`${data.items.length} producto(s) extraído(s) con IA. Revisá y confirmá.`);
+      } else if (data.success && (!data.items || data.items.length === 0)) {
+        setAiError('La IA no pudo identificar productos en el archivo. Probá con una captura más clara del email.');
+      } else {
+        setAiError(data.error || 'No se pudo extraer información del archivo.');
+      }
+    } catch (err: any) {
+      console.error('Error en extracción IA:', err);
+      if (err.message?.includes('fetch') || err.message?.includes('Failed')) {
+        setAiError('No se pudo conectar al servidor de IA. Esta función requiere ejecutar la app en modo servidor (npm run dev). No funciona en GitHub Pages estático.');
+      } else {
+        setAiError(err.message || 'Error desconocido al procesar con IA.');
+      }
+    } finally {
+      setAiProcessing(false);
+    }
+  }, [showToast]);
+
+  const confirmAiExtraction = useCallback(() => {
+    if (aiExtractedItems.length === 0) return;
+
+    const newCartItems: CartItem[] = [];
+    let matchedCount = 0;
+    let unmatchedItems: string[] = [];
+
+    aiExtractedItems.forEach(ei => {
+      const searchTerm = ei.producto.toLowerCase().trim();
+      let bestMatch: any = null;
+      let bestScore = 0;
+
+      inventoryData.forEach(inv => {
+        const invProduct = (inv.producto || '').toLowerCase().trim();
+        if (!invProduct) return;
+
+        if (invProduct === searchTerm) {
+          bestMatch = inv;
+          bestScore = 100;
+          return;
+        }
+
+        if (invProduct.includes(searchTerm) || searchTerm.includes(invProduct)) {
+          const score = Math.min(searchTerm.length, invProduct.length) / Math.max(searchTerm.length, invProduct.length);
+          if (score > bestScore && score > 0.5) {
+            bestScore = score;
+            bestMatch = inv;
+          }
+        }
+      });
+
+      if (bestMatch) {
+        const existingInCart = newCartItems.find(c => c.inventoryId === bestMatch.id);
+        if (existingInCart) {
+          existingInCart.pallets += ei.pallets || 1;
+          existingInCart.cajas += ei.cajas || 0;
+          existingInCart.kilos += ei.kilos || 0;
+        } else {
+          newCartItems.push({
+            inventoryId: bestMatch.id,
+            producto: bestMatch.producto,
+            contenedor: ei.contenedor || bestMatch.contenedor,
+            lote: ei.lote || bestMatch.lote || '',
+            cliente: bestMatch.cliente,
+            pallets: ei.pallets || 1,
+            cajas: ei.cajas || 0,
+            kilos: ei.kilos || 0,
+            maxPallets: Number(bestMatch.pallets) || 0,
+            maxCajas: Number(bestMatch.cantidad) || 0,
+            maxKilos: Number(bestMatch.kilos) || 0,
+          });
+        }
+        matchedCount++;
+      } else {
+        unmatchedItems.push(ei.producto);
+      }
+    });
+
+    if (newCartItems.length > 0) {
+      setCart(prev => [...prev, ...newCartItems]);
+
+      if (aiClientName) {
+        const matchedClient = clientOptions.find(co =>
+          co.value.toLowerCase().includes(aiClientName.toLowerCase()) ||
+          aiClientName.toLowerCase().includes(co.value.toLowerCase()) ||
+          (co.sub && co.sub.includes(aiClientName))
+        );
+        if (matchedClient) {
+          setSelClient(matchedClient.value);
+        }
+      }
+
+      if (newCartItems.length > 0 && newCartItems[0].contenedor) {
+        setSelContainer(newCartItems[0].contenedor);
+      }
+
+      if (aiObservaciones && !observaciones) {
+        setObservaciones(aiObservaciones.toUpperCase());
+      }
+
+      let msg = `${matchedCount} producto(s) cargado(s) al pedido.`;
+      if (unmatchedItems.length > 0) {
+        msg += ` No encontrados: ${unmatchedItems.join(', ')}`;
+      }
+      showToast(msg);
+      setShowAiPanel(false);
+      setAiExtractedItems([]);
+    } else {
+      showToast('No se pudo encontrar ningún producto en el inventario. Verificá que el inventario esté cargado.', 'error');
+    }
+  }, [aiExtractedItems, aiClientName, aiObservaciones, observaciones, inventoryData, clientOptions, showToast]);
+
+  // ── ARCHIVO UPLOAD ───────────────────────────────
+
   const handleArchivoUpload = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
 
-    const newArchivos: ArchivoAdjunto[] = [];
     let errorCount = 0;
 
     Array.from(files).forEach(file => {
@@ -568,9 +734,10 @@ export default function Pedidos({ inventoryData, onUpdateInventory }: PedidosPro
           dataUrl,
         };
         setArchivosAdjuntos(prev => {
-          // Evitar duplicados por nombre
           if (prev.some(a => a.nombre === archivo.nombre)) return prev;
-          return [...prev, archivo];
+          const updated = [...prev, archivo];
+          setTimeout(() => processWithAI(archivo), 300);
+          return updated;
         });
       };
       reader.readAsDataURL(file);
@@ -580,9 +747,8 @@ export default function Pedidos({ inventoryData, onUpdateInventory }: PedidosPro
       showToast(`${errorCount} archivo(s) rechazado(s). Max 4MB, formatos: PDF, JPG, PNG, Excel, CSV.`, 'error');
     }
 
-    // Reset input
     if (archivoInputRef.current) archivoInputRef.current.value = '';
-  }, [showToast]);
+  }, [showToast, processWithAI]);
 
   const removeArchivo = useCallback((nombre: string) => {
     setArchivosAdjuntos(prev => prev.filter(a => a.nombre !== nombre));
@@ -1300,10 +1466,10 @@ export default function Pedidos({ inventoryData, onUpdateInventory }: PedidosPro
               )}
             </div>
 
-            {/* Adjuntar archivo del pedido */}
+            {/* Adjuntar archivo del pedido + IA */}
             <div>
               <label className="block text-[10px] font-mono uppercase tracking-widest text-neutral-500 mb-2">
-                Archivo del Pedido (Email / Captura / Documento)
+                Subir Email de Pedido (IA Extrae los Datos Automáticamente)
               </label>
               <input
                 type="file"
@@ -1317,15 +1483,16 @@ export default function Pedidos({ inventoryData, onUpdateInventory }: PedidosPro
                 <button
                   type="button"
                   onClick={() => archivoInputRef.current?.click()}
-                  className="px-4 py-2 text-[10px] font-mono uppercase tracking-widest bg-neutral-900 text-white hover:bg-neutral-800 transition-colors flex items-center gap-2"
+                  disabled={aiProcessing}
+                  className="px-4 py-2 text-[10px] font-mono uppercase tracking-widest bg-neutral-900 text-white hover:bg-neutral-800 transition-colors flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
                   </svg>
-                  Subir PDF / Excel / JPG
+                  {aiProcessing ? 'Procesando con IA...' : 'Subir PDF / Excel / JPG'}
                 </button>
                 <span className="text-[10px] font-mono text-neutral-400 uppercase tracking-widest">
-                  Max 4MB por archivo
+                  Max 4MB · IA Lee y Extrae el Pedido
                 </span>
               </div>
 
@@ -1358,6 +1525,15 @@ export default function Pedidos({ inventoryData, onUpdateInventory }: PedidosPro
                       </div>
                       <button
                         type="button"
+                        onClick={() => processWithAI(archivo)}
+                        disabled={aiProcessing}
+                        className="px-2 py-1 text-[9px] font-mono uppercase tracking-widest bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100 transition-colors disabled:opacity-50"
+                        title="Re-procesar con IA"
+                      >
+                        IA
+                      </button>
+                      <button
+                        type="button"
                         onClick={() => removeArchivo(archivo.nombre)}
                         className="text-neutral-400 hover:text-red-600 transition-colors text-sm leading-none shrink-0 p-1"
                         title="Eliminar archivo"
@@ -1368,6 +1544,138 @@ export default function Pedidos({ inventoryData, onUpdateInventory }: PedidosPro
                       </button>
                     </div>
                   ))}
+                </div>
+              )}
+
+              {/* AI Processing Indicator */}
+              {aiProcessing && (
+                <div className="mt-3 border-2 border-dashed border-blue-300 bg-blue-50 p-4 flex items-center gap-3">
+                  <div className="w-5 h-5 border-2 border-blue-600 border-t-transparent rounded-full animate-spin flex-shrink-0" />
+                  <div>
+                    <p className="text-[11px] font-mono font-medium text-blue-900 uppercase">
+                      Analizando archivo con IA...
+                    </p>
+                    <p className="text-[9px] font-mono text-blue-600 uppercase mt-0.5">
+                      Leyendo contenido, extrayendo productos y cantidades del pedido
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {/* AI Error */}
+              {aiError && !aiProcessing && (
+                <div className="mt-3 border border-red-200 bg-red-50 p-3">
+                  <div className="flex items-start gap-2">
+                    <svg className="w-4 h-4 text-red-500 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01M12 2a10 10 0 100 20 10 10 0 000-20z" />
+                    </svg>
+                    <div>
+                      <p className="text-[11px] font-mono font-medium text-red-800 uppercase">
+                        Error en extracción IA
+                      </p>
+                      <p className="text-[10px] font-mono text-red-600 mt-0.5">
+                        {aiError}
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => { setAiError(''); setShowAiPanel(false); }}
+                      className="text-red-400 hover:text-red-600 ml-auto flex-shrink-0"
+                    >
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* AI Extracted Results Panel */}
+              {showAiPanel && aiExtractedItems.length > 0 && !aiProcessing && (
+                <div className="mt-3 border-2 border-emerald-300 bg-emerald-50 p-4">
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="flex items-center gap-2">
+                      <div className="w-6 h-6 bg-emerald-600 rounded flex items-center justify-center">
+                        <svg className="w-3.5 h-3.5 text-white" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                        </svg>
+                      </div>
+                      <div>
+                        <p className="text-[11px] font-mono font-medium text-emerald-900 uppercase">
+                          Datos Extraídos por IA
+                        </p>
+                        <p className="text-[9px] font-mono text-emerald-600 uppercase">
+                          {aiExtractedItems.length} producto(s) encontrado(s) · Revisá antes de confirmar
+                        </p>
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => setShowAiPanel(false)}
+                      className="text-emerald-400 hover:text-emerald-700"
+                    >
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                    </button>
+                  </div>
+
+                  {/* Client name if detected */}
+                  {aiClientName && (
+                    <div className="mb-3 px-3 py-2 bg-white border border-emerald-200">
+                      <span className="text-[9px] font-mono text-emerald-600 uppercase">Cliente detectado: </span>
+                      <span className="text-[11px] font-mono font-bold text-emerald-900 uppercase">{aiClientName}</span>
+                    </div>
+                  )}
+
+                  {/* Extracted items table */}
+                  <div className="overflow-x-auto mb-3">
+                    <div className="grid grid-cols-12 gap-1 p-2 bg-emerald-800 text-white text-[8px] font-mono uppercase tracking-widest rounded-t">
+                      <div className="col-span-5">Producto</div>
+                      <div className="col-span-2 text-center">Contenedor</div>
+                      <div className="col-span-1 text-center">PAL</div>
+                      <div className="col-span-1 text-center">CAJ</div>
+                      <div className="col-span-1 text-center">KG</div>
+                      <div className="col-span-2 text-center">Lote</div>
+                    </div>
+                    <div className="divide-y divide-emerald-200 border border-t-0 border-emerald-300 rounded-b">
+                      {aiExtractedItems.map((item, idx) => (
+                        <div key={idx} className="grid grid-cols-12 gap-1 p-2 bg-white text-[10px] font-mono hover:bg-emerald-50">
+                          <div className="col-span-5 text-neutral-900 truncate font-medium">{item.producto}</div>
+                          <div className="col-span-2 text-center text-neutral-600 font-mono">{item.contenedor || '-'}</div>
+                          <div className="col-span-1 text-center text-neutral-900 font-bold">{item.pallets || 0}</div>
+                          <div className="col-span-1 text-center text-neutral-600">{item.cajas || 0}</div>
+                          <div className="col-span-1 text-center text-neutral-600">{item.kilos || 0}</div>
+                          <div className="col-span-2 text-center text-neutral-400 font-mono">{item.lote || '-'}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Observaciones from AI */}
+                  {aiObservaciones && (
+                    <div className="mb-3 px-3 py-2 bg-white border border-emerald-200 text-[10px] font-mono text-neutral-600">
+                      <span className="text-[9px] font-mono text-emerald-600 uppercase">Obs: </span>
+                      {aiObservaciones}
+                    </div>
+                  )}
+
+                  {/* Action buttons */}
+                  <div className="flex items-center gap-3">
+                    <button
+                      onClick={confirmAiExtraction}
+                      className="flex-1 px-4 py-2.5 bg-emerald-700 text-white text-[10px] font-mono uppercase tracking-widest hover:bg-emerald-800 transition-colors font-medium"
+                    >
+                      Cargar al Pedido ({aiExtractedItems.length} ítem)
+                    </button>
+                    <button
+                      onClick={() => {
+                        setShowAiPanel(false);
+                        setAiExtractedItems([]);
+                      }}
+                      className="px-4 py-2.5 text-[10px] font-mono uppercase tracking-widest border border-emerald-300 text-emerald-700 hover:bg-emerald-100 transition-colors"
+                    >
+                      Cancelar
+                    </button>
+                  </div>
                 </div>
               )}
             </div>
