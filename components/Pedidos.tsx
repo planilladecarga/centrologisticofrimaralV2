@@ -732,7 +732,8 @@ export default function Pedidos({ inventoryData, onUpdateInventory }: PedidosPro
         setArchivosAdjuntos(prev => {
           if (prev.some(a => a.nombre === archivo.nombre)) return prev;
           const updated = [...prev, archivo];
-          setTimeout(() => processWithAI(archivo), 300);
+          // AI auto-processing disabled: only works in server mode (npm run dev)
+          // User can manually click the "IA" button per file if running locally
           return updated;
         });
       };
@@ -1524,7 +1525,7 @@ export default function Pedidos({ inventoryData, onUpdateInventory }: PedidosPro
                         onClick={() => processWithAI(archivo)}
                         disabled={aiProcessing}
                         className="px-2 py-1 text-[9px] font-mono uppercase tracking-widest bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100 transition-colors disabled:opacity-50"
-                        title="Re-procesar con IA"
+                        title="Extraer datos con IA (requiere npm run dev - no funciona en GitHub Pages)"
                       >
                         IA
                       </button>
