@@ -15,6 +15,7 @@ import {
 const REFRESH_MS = 3 * 60 * 1000;
 const REFRESH_SECONDS = REFRESH_MS / 1000;
 const DIRECT_URL = 'http://192.168.150.31/TemperaturaWeb/temperatura.php';
+const SENSOR_URL = 'http://192.168.150.31/TemperaturaWeb/sensores.php';
 
 const DEMO_SENSORS = [
   'Camara Frigorifica 1 - Congelados',
@@ -161,83 +162,124 @@ export default function TemperatureMonitor() {
 
   const isGitHubPages = typeof window !== 'undefined' && window.location.hostname.includes('github.io');
 
-  // Obtener sensores (intenta servidor, fallback a demo)
+  // Obtener sensores — intenta: 1) fetch directo al PHP, 2) API local, 3) demo
   const fetchSensors = useCallback(async () => {
-    if (isGitHubPages) {
-      setIsDemo(true);
-      setSensors(DEMO_SENSORS);
-      setSelectedSensor(DEMO_SENSORS[0]);
-      return false;
-    }
+    // Strategy 1: Try direct PHP endpoint (works from internal network)
     try {
-      const res = await fetch('/api/temperatura/sensors', { cache: 'no-store' });
-      if (!res.ok) throw new Error(`${res.status}`);
-      const json = await res.json();
-      if (json.sensors && json.sensors.length > 0) {
-        setSensors(json.sensors);
-        setSelectedSensor(json.sensors[0]);
-        return true;
+      const res = await fetch(SENSOR_URL, { 
+        method: 'POST',
+        cache: 'no-store',
+        signal: AbortSignal.timeout(5000),
+      });
+      if (res.ok) {
+        const json = await res.json();
+        if (json.sensors && json.sensors.length > 0) {
+          setSensors(json.sensors);
+          setSelectedSensor(json.sensors[0]);
+          setIsDemo(false);
+          return true;
+        }
       }
-      return false;
     } catch {
-      return false;
+      // CORS blocked or network unreachable — try next strategy
     }
+
+    // Strategy 2: Try local API route (npm run dev mode)
+    if (!isGitHubPages) {
+      try {
+        const res = await fetch('/api/temperatura/sensors', { cache: 'no-store' });
+        if (res.ok) {
+          const json = await res.json();
+          if (json.sensors && json.sensors.length > 0) {
+            setSensors(json.sensors);
+            setSelectedSensor(json.sensors[0]);
+            setIsDemo(false);
+            return true;
+          }
+        }
+      } catch {
+        // API not available
+      }
+    }
+
+    // Strategy 3: Demo mode
+    setIsDemo(true);
+    setSensors(DEMO_SENSORS);
+    setSelectedSensor(DEMO_SENSORS[0]);
+    return false;
   }, [isGitHubPages]);
 
-  // Obtener datos de temperatura (intenta servidor, fallback a demo)
+  // Obtener datos de temperatura — intenta: 1) fetch directo al PHP, 2) API local, 3) demo
   const fetchData = useCallback(async () => {
     if (!selectedSensor) return;
     setStatus('loading');
     setErrorMsg('');
 
-    if (isGitHubPages) {
-      // Modo demo para GitHub Pages
-      const demoData = generateDemoData(selectedSensor);
-      setData(demoData);
-      setStatus('demo');
-      setIsDemo(true);
-      setCountdown(REFRESH_SECONDS);
-      return;
-    }
-
+    // Strategy 1: Try direct PHP endpoint
     try {
       const bodyParams = new URLSearchParams();
       bodyParams.append('sensor', selectedSensor);
       bodyParams.append('start_date', startDate);
       bodyParams.append('end_date', endDate);
 
-      const res = await fetch('/api/temperatura/data', {
+      const res = await fetch(DIRECT_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         body: bodyParams.toString(),
         cache: 'no-store',
+        signal: AbortSignal.timeout(8000),
       });
 
-      if (!res.ok) {
-        const errData = await res.json().catch(() => null);
-        throw new Error(errData?.error || `Server responded with ${res.status}`);
+      if (res.ok) {
+        const json: TempData = await res.json();
+        if (json.temperatures && json.temperatures.length > 0 && !json.error) {
+          setData(json);
+          setStatus('ok');
+          setIsDemo(false);
+          setCountdown(REFRESH_SECONDS);
+          return;
+        }
       }
-
-      const json: TempData = await res.json();
-      if (json.error) {
-        throw new Error(json.error);
-      }
-
-      setData(json);
-      setStatus('ok');
-      setIsDemo(false);
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Error desconocido';
-
-      // Si no hay servidor, generar datos demo en vez de mostrar error
-      const demoData = generateDemoData(selectedSensor);
-      setData(demoData);
-      setStatus('demo');
-      setIsDemo(true);
-      setErrorMsg(msg); // Guardar por si se necesita
-    } finally {
-      setCountdown(REFRESH_SECONDS);
+    } catch {
+      // CORS blocked or network unreachable
     }
+
+    // Strategy 2: Try local API route
+    if (!isGitHubPages) {
+      try {
+        const bodyParams = new URLSearchParams();
+        bodyParams.append('sensor', selectedSensor);
+        bodyParams.append('start_date', startDate);
+        bodyParams.append('end_date', endDate);
+
+        const res = await fetch('/api/temperatura/data', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: bodyParams.toString(),
+          cache: 'no-store',
+        });
+
+        if (res.ok) {
+          const json: TempData = await res.json();
+          if (!json.error) {
+            setData(json);
+            setStatus('ok');
+            setIsDemo(false);
+            setCountdown(REFRESH_SECONDS);
+            return;
+          }
+        }
+      } catch {
+        // API not available
+      }
+    }
+
+    // Strategy 3: Demo data
+    const demoData = generateDemoData(selectedSensor);
+    setData(demoData);
+    setStatus('demo');
+    setIsDemo(true);
+    setCountdown(REFRESH_SECONDS);
   }, [selectedSensor, startDate, endDate, isGitHubPages]);
 
   // Carga inicial
