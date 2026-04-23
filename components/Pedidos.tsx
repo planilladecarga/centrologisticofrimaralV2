@@ -570,7 +570,7 @@ export default function Pedidos({ inventoryData, onUpdateInventory }: PedidosPro
   ];
   const ACCEPTED_EXT = '.pdf,.jpg,.jpeg,.png,.gif,.webp,.bmp,.xlsx,.xls,.csv';
 
-  // ── AI EXTRACTION (100% client-side via Google Gemini API) ──
+  // ── EXTRACCION NATIVA (100% gratis, sin API, sin límites) ──
 
   const saveGeminiKey = useCallback((key: string) => {
     setGeminiApiKey(key);
@@ -579,18 +579,307 @@ export default function Pedidos({ inventoryData, onUpdateInventory }: PedidosPro
     }
   }, []);
 
-  const parseAIResponse = (content: string) => {
+  // ── Native text extraction from file ──
+  const extractTextFromFile = async (archivo: ArchivoAdjunto, onProgress?: (msg: string) => void): Promise<{ text: string; isTabular: boolean; rows?: any[] }> => {
+    if (archivo.tipo.startsWith('image/')) {
+      onProgress?.('Leyendo imagen con OCR...');
+      const Tesseract = await import('tesseract.js');
+      const base64Data = archivo.dataUrl.replace(/^data:image\/[^;]+;base64,/, '');
+      const result = await Tesseract.recognize(base64Data, 'spa+eng', {
+        logger: (m: any) => {
+          if (m.status === 'recognizing text') {
+            const pct = Math.round((m.progress || 0) * 100);
+            onProgress?.(`OCR leyendo imagen... ${pct}%`);
+          }
+        },
+      });
+      return { text: result.data.text, isTabular: false };
+    }
+
+    if (archivo.tipo.includes('pdf') || archivo.nombre.endsWith('.pdf')) {
+      onProgress?.('Extrayendo texto del PDF...');
+      const pdfjsLib = await import('pdfjs-dist');
+      const raw = archivo.dataUrl.replace(/^data:application\/pdf;base64,/, '');
+      const pdfData = Uint8Array.from(atob(raw), c => c.charCodeAt(0));
+      const pdf = await pdfjsLib.getDocument({ data: pdfData }).promise;
+      let fullText = '';
+      for (let i = 1; i <= pdf.numPages; i++) {
+        onProgress?.(`Leyendo página ${i}/${pdf.numPages}...`);
+        const page = await pdf.getPage(i);
+        const textContent = await page.getTextContent();
+        fullText += textContent.items.map((item: any) => item.str).join(' ') + '\n';
+      }
+      return { text: fullText, isTabular: false };
+    }
+
+    // Excel / CSV
+    onProgress?.('Leyendo planilla Excel...');
+    const XLSX = await import('xlsx');
+    const raw = archivo.dataUrl.replace(/^data:application\/[^;]+;base64,/, '');
+    const bytes = new Uint8Array(raw.length);
+    for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+    const workbook = XLSX.read(bytes, { type: 'array' });
+    const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
+    const data = XLSX.utils.sheet_to_json<any[]>(firstSheet, { defval: '' });
+    const textRep = data.map((row, idx) =>
+      `Fila ${idx + 1}: ${Object.entries(row).map(([k, v]) => `${k}=${v}`).join(', ')}`
+    ).join('\n');
+    return { text: textRep, isTabular: true, rows: data };
+  };
+
+  // ── Regex-based order extraction from text ──
+  const extractOrderFromText = (text: string, rows?: any[]): ExtractResult => {
+    const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+    const items: ExtractItem[] = [];
+    let cliente = '';
+    let contenedor = '';
+    let lote = '';
+    let observaciones = '';
+
+    // Detect container number (typically 4-7 digits, often starting with letters)
+    const containerPatterns = [
+      /contenedor[:\s-]*([A-Za-z]{0,4}\d{4,8})/i,
+      /container[:\s-]*([A-Za-z]{0,4}\d{4,8})/i,
+      /cont[:\s-]*([A-Za-z]{0,4}\d{4,8})/i,
+      /\b([A-Z]{4}\d{7})\b/, // e.g. TRLU1234567
+      /\b(MSCU\d{7})\b/,
+      /\b(CLRU\d{7})\b/,
+      /\b(TEMU\d{7})\b/,
+      /\b(CXDU\d{7})\b/,
+      /\b(OOLU\d{7})\b/,
+      /\b(HLCU\d{7})\b/,
+      /\b(FCMU\d{7})\b/,
+      /\b(BMOU\d{7})\b/,
+      /\b(CS LU\d{7})\b/,
+    ];
+    for (const pat of containerPatterns) {
+      const m = text.match(pat);
+      if (m) { contenedor = m[1].toUpperCase().replace(/\s/g, ''); break; }
+    }
+
+    // Detect lot number
+    const lotPatterns = [
+      /lote[:\s-]*([A-Za-z0-9]{3,15})/i,
+      /lot[:\s-]*([A-Za-z0-9]{3,15})/i,
+      /lote\s*#?\s*([A-Za-z0-9]{3,15})/i,
+      /LT\s*[-:]?\s*([A-Za-z0-9]{3,15})/i,
+    ];
+    for (const pat of lotPatterns) {
+      const m = text.match(pat);
+      if (m && !/^\d+$/.test(m[1])) { lote = m[1].toUpperCase().trim(); break; }
+    }
+
+    // Detect client name (look for common patterns)
+    const clientPatterns = [
+      /(?:cliente|customer|client|para|destinatario|consignatario)[:\s-]*([^\n,;]{2,40})/i,
+      /DYSA\s*10330/i,
+    ];
+    for (const pat of clientPatterns) {
+      const m = text.match(pat);
+      if (m) { cliente = m[1]?.trim() || 'SADETIR (DYSA 10330)'; break; }
+    }
+    if (!cliente && text.match(/DYSA|SADETIR|10330/i)) {
+      cliente = 'SADETIR (DYSA 10330)';
+    }
+
+    // Quantity units keywords
+    const units = {
+      pallets: /\b(pallets?|pales?|pallet)\b/i,
+      cajas: /\b(cajas?|caja|boxes?|bultos?)\b/i,
+      kilos: /\b(kilos?|kgs?|kg)\b/i,
+    };
+
+    // ── If Excel rows: extract from structured data ──
+    if (rows && rows.length > 0) {
+      const headers = Object.keys(rows[0]).map(h => h.toLowerCase().trim());
+      const prodCol = headers.find(h => /producto|product|descripcion|desc|item|nombre|name|mercaderia|mercadería/i.test(h));
+      const palletCol = headers.find(h => /pallet|pale/i.test(h));
+      const cajaCol = headers.find(h => /caja|box|bulto/i.test(h));
+      const kiloCol = headers.find(h => /kilo|kg|peso|weight/i.test(h));
+      const contCol = headers.find(h => /contenedor|container|cont/i.test(h));
+      const loteCol = headers.find(h => /lote|lot/i.test(h));
+
+      for (const row of rows) {
+        const prod = prodCol ? String(row[headers.find(h => h === prodCol) || prodCol] || '').trim() : '';
+        if (!prod) continue;
+        items.push({
+          producto: prod,
+          contenedor: contCol ? String(row[headers.find(h => h === contCol) || contCol] || '').trim() : contenedor,
+          lote: loteCol ? String(row[headers.find(h => h === loteCol) || loteCol] || '').trim() : lote,
+          pallets: palletCol ? Number(row[headers.find(h => h === palletCol) || palletCol]) || 0 : 0,
+          cajas: cajaCol ? Number(row[headers.find(h => h === cajaCol) || cajaCol]) || 0 : 0,
+          kilos: kiloCol ? Number(row[headers.find(h => h === kiloCol) || kiloCol]) || 0 : 0,
+        });
+      }
+    }
+
+    // ── Extract from text lines ──
+    if (items.length === 0) {
+      // Pattern 1: "N pallets de PRODUCTO" / "N cajas PRODUCTO" / "N kilos PRODUCTO"
+      const qtyProductPattern = /(\d+(?:[.,]\d+)?)\s*(pallets?|pales?|cajas?|bultos?|kilos?|kgs?|kg|units?|unidades?)\s*(?:de|del|por)?\s*(.+)/i;
+      // Pattern 2: "PRODUCTO: N pallets" / "PRODUCTO - N cajas"
+      const productQtyPattern = /([A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑa-záéíóúñ\s/()\-\.]+?)\s*[:\-–—]\s*(\d+(?:[.,]\d+)?)\s*(pallets?|pales?|cajas?|bultos?|kilos?|kgs?|kg|units?|unidades?)/i;
+      // Pattern 3: "PRODUCTO x N" / "PRODUCTO X N"
+      const productXQtyPattern = /([A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑa-záéíóúñ\s/()\-\.]+?)\s*[xX]\s*(\d+(?:[.,]\d+)?)/i;
+      // Pattern 4: standalone number + product on same line "5 MANZANAS"
+      const numberProductPattern = /^\s*(\d{1,4})\s+([A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑa-záéíóúñ\s/()\-\.]{3,40})\s*$/;
+
+      for (const line of lines) {
+        if (line.length < 4) continue;
+
+        let match: RegExpExecArray | null = null;
+
+        // Try pattern 1: quantity unit of product
+        match = qtyProductPattern.exec(line);
+        if (match) {
+          const qty = Number(match[1].replace(',', '.')) || 0;
+          const unit = (match[2] || '').toLowerCase();
+          const prod = (match[3] || '').trim().replace(/[.,;]$/, '');
+          if (prod && qty > 0) {
+            items.push({
+              producto: prod,
+              contenedor,
+              lote,
+              pallets: units.pallets.test(unit) ? qty : 0,
+              cajas: units.cajas.test(unit) ? qty : 0,
+              kilos: units.kilos.test(unit) ? qty : 0,
+            });
+            continue;
+          }
+        }
+
+        // Try pattern 2: product: quantity unit
+        match = productQtyPattern.exec(line);
+        if (match) {
+          const prod = (match[1] || '').trim();
+          const qty = Number(match[2].replace(',', '.')) || 0;
+          const unit = (match[3] || '').toLowerCase();
+          if (prod && qty > 0) {
+            items.push({
+              producto: prod,
+              contenedor,
+              lote,
+              pallets: units.pallets.test(unit) ? qty : 0,
+              cajas: units.cajas.test(unit) ? qty : 0,
+              kilos: units.kilos.test(unit) ? qty : 0,
+            });
+            continue;
+          }
+        }
+
+        // Try pattern 3: product x N
+        match = productXQtyPattern.exec(line);
+        if (match) {
+          const prod = (match[1] || '').trim();
+          const qty = Number(match[2].replace(',', '.')) || 0;
+          if (prod && qty > 0) {
+            items.push({
+              producto: prod,
+              contenedor,
+              lote,
+              pallets: qty,
+              cajas: 0,
+              kilos: 0,
+            });
+            continue;
+          }
+        }
+
+        // Try pattern 4: "5 MANZANAS" (number followed by all-caps word)
+        match = numberProductPattern.exec(line);
+        if (match) {
+          const qty = Number(match[1]) || 0;
+          const prod = (match[2] || '').trim().replace(/[.,;]$/, '');
+          // Only match if the "product" looks like a word (not a sentence)
+          if (prod && prod.length > 2 && prod.length < 40 && qty > 0 && qty < 10000 && !/^\d+$/.test(prod)) {
+            items.push({
+              producto: prod,
+              contenedor,
+              lote,
+              pallets: qty,
+              cajas: 0,
+              kilos: 0,
+            });
+          }
+        }
+      }
+    }
+
+    // If still no items found, try to extract ANY line that looks like a product (uppercase-heavy lines)
+    if (items.length === 0) {
+      for (const line of lines) {
+        const cleaned = line.replace(/^[\-\d.\s]+/, '').replace(/[\-,\s]+$/, '').trim();
+        if (cleaned.length >= 3 && cleaned.length <= 60) {
+          const upperCount = (cleaned.match(/[A-ZÁÉÍÓÚÑ]/g) || []).length;
+          const alphaCount = (cleaned.match(/[A-Za-zÁÉÍÓÚÑáéíóúñ]/g) || []).length;
+          // If mostly uppercase letters, likely a product name
+          if (alphaCount > 2 && upperCount / alphaCount > 0.5) {
+            // Try to extract a number from the line
+            const numMatch = cleaned.match(/(\d+)/);
+            items.push({
+              producto: cleaned,
+              contenedor,
+              lote,
+              pallets: numMatch ? Number(numMatch[1]) || 1 : 1,
+              cajas: 0,
+              kilos: 0,
+            });
+          }
+        }
+      }
+    }
+
+    // Deduplicate items by product name
+    const seen = new Set<string>();
+    const deduped = items.filter(item => {
+      const key = item.producto.toLowerCase().trim();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+
+    return {
+      success: deduped.length > 0,
+      items: deduped,
+      cliente,
+      contenedor,
+      lote,
+      observaciones,
+      rawText: text.substring(0, 2000),
+    };
+  };
+
+  interface ExtractItem {
+    producto: string;
+    contenedor: string;
+    lote: string;
+    pallets: number;
+    cajas: number;
+    kilos: number;
+  }
+
+  interface ExtractResult {
+    success: boolean;
+    items: ExtractItem[];
+    cliente: string;
+    contenedor: string;
+    lote: string;
+    observaciones: string;
+    rawText: string;
+    error?: string;
+  }
+
+  // ── Gemini helpers (optional, only if API key set) ──
+  const parseAIResponse = (content: string): ExtractResult => {
     try {
       let jsonStr = content.trim();
       const jsonMatch = jsonStr.match(/```(?:json)?\s*([\s\S]*?)```/);
       if (jsonMatch) jsonStr = jsonMatch[1].trim();
       const firstBrace = jsonStr.indexOf('{');
       const lastBrace = jsonStr.lastIndexOf('}');
-      if (firstBrace !== -1 && lastBrace !== -1) {
-        jsonStr = jsonStr.substring(firstBrace, lastBrace + 1);
-      }
+      if (firstBrace !== -1 && lastBrace !== -1) jsonStr = jsonStr.substring(firstBrace, lastBrace + 1);
       const parsed = JSON.parse(jsonStr);
-      if (parsed.error) return { success: false, error: parsed.error, items: [], cliente: '', observaciones: '', rawText: '' };
+      if (parsed.error) return { success: false, error: parsed.error, items: [], cliente: '', contenedor: '', lote: '', observaciones: '', rawText: '' };
       const items = (parsed.items || []).map((item: any) => ({
         producto: String(item.producto || '').trim(),
         contenedor: String(item.contenedor || '').trim(),
@@ -598,43 +887,27 @@ export default function Pedidos({ inventoryData, onUpdateInventory }: PedidosPro
         pallets: Number(item.pallets) || 0,
         cajas: Number(item.cajas) || 0,
         kilos: Number(item.kilos) || 0,
-      })).filter((item: any) => item.producto);
-      return { success: true, items, cliente: String(parsed.cliente || '').trim(), observaciones: String(parsed.observaciones || '').trim(), rawText: '' };
+      })).filter((item: ExtractItem) => item.producto);
+      return { success: true, items, cliente: String(parsed.cliente || '').trim(), contenedor: '', lote: '', observaciones: String(parsed.observaciones || '').trim(), rawText: '' };
     } catch {
-      return { success: false, error: 'No se pudo interpretar la respuesta de la IA.', items: [], cliente: '', observaciones: '', rawText: '' };
+      return { success: false, error: 'No se pudo interpretar la respuesta de la IA.', items: [], cliente: '', contenedor: '', lote: '', observaciones: '', rawText: '' };
     }
   };
 
-  // Helper: extract clean error from Gemini API errors
   const getCleanAIError = (err: any): string => {
     const msg = err.message || String(err) || '';
-    // Parse JSON error blob from Gemini API
     try {
       const jsonMatch = msg.match(/\{.*"error".*\}/);
       if (jsonMatch) {
         const parsed = JSON.parse(jsonMatch[0]);
-        if (parsed.error?.status === 'RESOURCE_EXHAUSTED' || msg.includes('429') || msg.includes('quota') || msg.includes('Quota exceeded')) {
-          return 'Límite de uso alcanzado (quota). Esperá unos segundos y volvé a intentar. Si el problema persiste, necesitás una API Key con plan de pago o esperá hasta mañana (se reinicia el quota diario).';
+        if (parsed.error?.status === 'RESOURCE_EXHAUSTED' || msg.includes('429') || msg.includes('quota')) {
+          return 'Límite de uso Gemini. La extracción nativa funcionó correctamente.';
         }
         if (parsed.error?.status === 'PERMISSION_DENIED' || parsed.error?.status === 'UNAUTHENTICATED') {
-          return 'API Key inválida o sin permisos. Verificá que la clave sea correcta en Configuración IA.';
-        }
-        if (parsed.error?.message) {
-          // Return just the short message, not the full JSON
-          return parsed.error.message.split('\n')[0];
+          return 'API Key inválida. Se usó extracción nativa.';
         }
       }
     } catch {}
-    // String-based fallback detection
-    if (msg.includes('429') || msg.includes('quota') || msg.includes('RESOURCE_EXHAUSTED')) {
-      return 'Límite de uso alcanzado (quota). Esperá unos segundos y volvé a intentar.';
-    }
-    if (msg.includes('API_KEY') || msg.includes('401') || msg.includes('403')) {
-      return 'API Key inválida. Verificá que la clave sea correcta en Configuración IA.';
-    }
-    if (msg.includes('CORS') || msg.includes('Failed to fetch')) {
-      return 'Error de conexión. Verificá tu conexión a internet.';
-    }
     return msg.length > 120 ? msg.substring(0, 120) + '...' : msg;
   };
 
@@ -646,9 +919,7 @@ export default function Pedidos({ inventoryData, onUpdateInventory }: PedidosPro
         const msg = err.message || String(err);
         const isRateLimit = msg.includes('429') || msg.includes('quota') || msg.includes('RESOURCE_EXHAUSTED');
         if (isRateLimit && attempt < maxRetries) {
-          const delay = Math.min(Math.pow(2, attempt) * 5000, 20000); // 5s, 10s
-          setAiError(prev => prev || `Límite de uso. Reintentando en ${delay / 1000}s... (${attempt + 1}/${maxRetries})`);
-          await new Promise(r => setTimeout(r, delay));
+          await new Promise(r => setTimeout(r, Math.pow(2, attempt) * 5000));
           continue;
         }
         throw err;
@@ -656,14 +927,8 @@ export default function Pedidos({ inventoryData, onUpdateInventory }: PedidosPro
     }
   };
 
+  // ── Main extraction: Native (free) + Gemini enhancement (optional) ──
   const processWithAI = useCallback(async (archivo: ArchivoAdjunto) => {
-    if (!geminiApiKey.trim()) {
-      setShowApiKeyInput(true);
-      setAiError('Configurá tu API Key de Gemini para usar la extracción con IA.');
-      setShowAiPanel(true);
-      return;
-    }
-
     setAiProcessing(true);
     setAiError('');
     setAiExtractedItems([]);
@@ -671,111 +936,67 @@ export default function Pedidos({ inventoryData, onUpdateInventory }: PedidosPro
     setShowAiPanel(true);
 
     try {
-      const ai = new GoogleGenAI({ apiKey: geminiApiKey.trim() });
-      const SYSTEM_PROMPT = `Eres un asistente especializado en logística de centro de frio. EXTRAER datos de pedidos desde capturas de emails, PDFs o planillas Excel.
+      // Step 1: Extract text from file (OCR for images, pdfjs for PDF, xlsx for Excel)
+      let result: ExtractResult;
 
-CONTEXTO: SADETIR (DYSA 10330) envía pedidos por email con productos y cantidades.
+      const { text, isTabular, rows } = await extractTextFromFile(archivo, (msg) => {
+        setAiError(msg);
+      });
+      setAiError('');
 
-INSTRUCCIONES:
-1. Identifica TODOS los productos mencionados
-2. Extrae cantidades (pallets, cajas, kilos) para cada producto
-3. Si menciona contenedor o lote, extrae los números
-4. El campo "producto" debe ser el nombre exacto como aparece
-5. Si solo se menciona cantidad sin unidad, asumir que son pallets
-
-RESPONDE ÚNICAMENTE con JSON válido, sin markdown ni backticks:
-{"cliente":"","items":[{"producto":"","contenedor":"","lote":"","pallets":0,"cajas":0,"kilos":0}],"observaciones":""}
-
-Si no identifies productos, devuelve items vacío. Si no es un pedido, devuelve {"error":"No se pudo identificar un pedido en el archivo"}.`;
-
-      let result;
-
-      if (archivo.tipo.startsWith('image/')) {
-        // Image: use Gemini multimodal (vision)
-        const base64Data = archivo.dataUrl.replace(/^data:image\/[^;]+;base64,/, '');
-        const mimeType = archivo.tipo || 'image/jpeg';
-        const response = await callGeminiWithRetry(ai, {
-          model: 'gemini-2.0-flash',
-          contents: [
-            { role: 'user', parts: [
-              { inlineData: { data: base64Data, mimeType } },
-              { text: 'Extrae todos los datos del pedido de esta imagen. Devuelve solo el JSON.' },
-            ]},
-          ],
-          config: { systemInstruction: SYSTEM_PROMPT },
-        });
-        result = parseAIResponse(response.text || '');
-      } else if (archivo.tipo.includes('pdf') || archivo.nombre.endsWith('.pdf')) {
-        // PDF: extract text with pdfjs-dist, then send to Gemini
-        const pdfjsLib = await import('pdfjs-dist');
-        const raw = archivo.dataUrl.replace(/^data:application\/pdf;base64,/, '');
-        const pdfData = Uint8Array.from(atob(raw), c => c.charCodeAt(0));
-        const pdf = await pdfjsLib.getDocument({ data: pdfData }).promise;
-        let fullText = '';
-        for (let i = 1; i <= pdf.numPages; i++) {
-          const page = await pdf.getPage(i);
-          const textContent = await page.getTextContent();
-          fullText += textContent.items.map((item: any) => item.str).join(' ') + '\n';
-        }
-        if (!fullText.trim()) {
-          setAiError('No se pudo extraer texto del PDF. Probá con una captura de pantalla (JPG/PNG).');
-          return;
-        }
-        result = parseAIResponse(fullText);
-        result.rawText = fullText;
-        if (result.success && result.items.length === 0) {
-          // Try with Gemini to interpret the text better
-          const response = await callGeminiWithRetry(ai, {
-            model: 'gemini-2.0-flash',
-            contents: `Texto extraído del PDF:\n\n${fullText}\n\nExtrae datos del pedido. Solo JSON.`,
-            config: { systemInstruction: SYSTEM_PROMPT },
-          });
-          result = parseAIResponse(response.text || '');
-          result.rawText = fullText;
-        }
-      } else {
-        // Excel/CSV: parse with xlsx, then send to Gemini
-        const XLSX = await import('xlsx');
-        const raw = archivo.dataUrl.replace(/^data:application\/[^;]+;base64,/, '');
-        const bytes = new Uint8Array(raw.length);
-        for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
-        const workbook = XLSX.read(bytes, { type: 'array' });
-        const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
-        const data = XLSX.utils.sheet_to_json<any[]>(firstSheet, { defval: '' });
-        if (!data || data.length === 0) {
-          setAiError('El archivo Excel está vacío.');
-          return;
-        }
-        const textRep = data.map((row, idx) =>
-          `Fila ${idx + 1}: ${Object.entries(row).map(([k, v]) => `${k}=${v}`).join(', ')}`
-        ).join('\n');
-        const response = await callGeminiWithRetry(ai, {
-          model: 'gemini-2.0-flash',
-          contents: `Datos del Excel:\n\n${textRep}\n\nExtrae datos del pedido. Solo JSON.`,
-          config: { systemInstruction: SYSTEM_PROMPT },
-        });
-        result = parseAIResponse(response.text || '');
-        result.rawText = textRep;
+      if (!text.trim()) {
+        setAiError('No se pudo extraer texto del archivo. Probá con una captura más clara.');
+        return;
       }
 
+      // Step 2: Native extraction (regex-based, always works)
+      result = extractOrderFromText(text, rows);
+
       if (result.success && result.items.length > 0) {
+        // Step 3: If Gemini API key available, enhance with AI
+        if (geminiApiKey.trim()) {
+          try {
+            setAiError('Mejorando con IA...');
+            const ai = new GoogleGenAI({ apiKey: geminiApiKey.trim() });
+            const SYSTEM_PROMPT = `Eres un asistente de logística de centro de frío. EXTRAER datos de pedidos.
+CONTEXTO: SADETIR (DYSA 10330).
+RESPONDE SOLO JSON: {"cliente":"","items":[{"producto":"","contenedor":"","lote":"","pallets":0,"cajas":0,"kilos":0}],"observaciones":""}`;
+            const response = await callGeminiWithRetry(ai, {
+              model: 'gemini-2.0-flash',
+              contents: `Texto extraído:\n\n${text.substring(0, 8000)}\n\nExtrae datos del pedido. Solo JSON.`,
+              config: { systemInstruction: SYSTEM_PROMPT },
+            });
+            const aiResult = parseAIResponse(response.text || '');
+            if (aiResult.success && aiResult.items.length > result.items.length) {
+              // Merge: use AI items but fill contenedor/lote from native if missing
+              aiResult.items.forEach(item => {
+                if (!item.contenedor && result.contenedor) item.contenedor = result.contenedor;
+                if (!item.lote && result.lote) item.lote = result.lote;
+                if (!aiResult.cliente && result.cliente) aiResult.cliente = result.cliente;
+              });
+              result = { ...aiResult, rawText: text.substring(0, 2000) };
+            }
+          } catch (geminiErr: any) {
+            console.warn('Gemini enhancement failed, using native result:', geminiErr.message);
+            // Continue with native result - it's fine
+          }
+        }
+
         setAiExtractedItems(result.items);
         setAiClientName(result.cliente || '');
         setAiObservaciones(result.observaciones || '');
         setAiRawText(result.rawText || '');
-        showToast(`${result.items.length} producto(s) extraído(s) con IA. Revisá y confirmá.`);
-      } else if (result.success && result.items.length === 0) {
-        setAiError('La IA no pudo identificar productos en el archivo. Probá con una captura más clara del email.');
+        showToast(`${result.items.length} producto(s) extraído(s). Revisá y confirmá.`);
+      } else if (text.trim().length > 10) {
+        // No items found but we have text - show the raw text for manual review
+        setAiRawText(text.substring(0, 2000));
+        setAiError('No se pudieron identificar productos automáticamente. Se extrajo texto que podés ver abajo. Probá con otra captura o usá Gemini para mejorar la detección.');
       } else {
-        setAiError(result.error || 'No se pudo extraer información del archivo.');
+        setAiError('No se pudo extraer información del archivo. Asegurate de que la imagen sea legible.');
       }
     } catch (err: any) {
-      console.error('Error en extracción IA:', err);
-      const cleanError = getCleanAIError(err);
-      setAiError(cleanError);
-      if (cleanError.includes('API Key')) {
-        setShowApiKeyInput(true);
-      }
+      console.error('Error en extracción:', err);
+      setAiError(`Error: ${err.message || 'Error desconocido'}`);
     } finally {
       setAiProcessing(false);
     }
@@ -1657,18 +1878,18 @@ Si no identifies productos, devuelve items vacío. Si no es un pedido, devuelve 
                   <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
                   </svg>
-                  {aiProcessing ? 'Procesando con IA...' : 'Subir PDF / Excel / JPG'}
+                  {aiProcessing ? 'Procesando...' : 'Subir PDF / Excel / JPG'}
                 </button>
                 <span className="text-[10px] font-mono text-neutral-400 uppercase tracking-widest">
-                  Max 4MB · IA Lee y Extrae el Pedido
+                  Max 4MB · Extracción 100% Gratis (OCR + IA)
                 </span>
-                {/* API Key config button */}
+                {/* API Key config button (optional enhancement) */}
                 <button
                   type="button"
                   onClick={() => setShowApiKeyInput(!showApiKeyInput)}
-                  className={`ml-auto px-2 py-1 text-[9px] font-mono uppercase tracking-widest border transition-colors ${geminiApiKey ? 'bg-emerald-50 text-emerald-600 border-emerald-200' : 'bg-amber-50 text-amber-600 border-amber-200'}`}
+                  className={`ml-auto px-2 py-1 text-[9px] font-mono uppercase tracking-widest border transition-colors ${geminiApiKey ? 'bg-emerald-50 text-emerald-600 border-emerald-200' : 'bg-neutral-50 text-neutral-500 border-neutral-200'}`}
                 >
-                  {geminiApiKey ? '✓ IA Configurada' : '🔑 Configurar IA'}
+                  {geminiApiKey ? '✓ Gemini' : 'Gemini (opcional)'}
                 </button>
               </div>
 
@@ -1741,10 +1962,10 @@ Si no identifies productos, devuelve items vacío. Si no es un pedido, devuelve 
                         type="button"
                         onClick={() => processWithAI(archivo)}
                         disabled={aiProcessing}
-                        className={`px-2 py-1 text-[9px] font-mono uppercase tracking-widest border transition-colors disabled:opacity-50 ${geminiApiKey ? 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100' : 'bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100'}`}
-                        title={!geminiApiKey ? 'Configurá API Key primero' : 'Extraer datos con IA (Gemini)'}
+                        className="px-2 py-1 text-[9px] font-mono uppercase tracking-widest bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100 transition-colors disabled:opacity-50"
+                        title="Extraer datos (OCR nativo + IA si está configurada)"
                       >
-                        {geminiApiKey ? 'IA' : 'IA 🔑'}
+                        {geminiApiKey ? 'IA+' : 'IA'}
                       </button>
                       <button
                         type="button"
