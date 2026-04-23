@@ -205,7 +205,7 @@ export default function Pedidos({ inventoryData, onUpdateInventory }: PedidosPro
   const [showAiPanel, setShowAiPanel] = useState(false);
   // AI Provider config (Groq / OpenRouter / Gemini)
   const AI_PROVIDERS = {
-    groq: { name: 'Groq', endpoint: 'https://api.groq.com/openai/v1/chat/completions', visionModel: 'llama-3.2-11b-vision-preview', textModel: 'llama-3.2-11b-vision-preview', keyLabel: 'Groq API Key', keyPrefix: 'gsk_', keyLink: 'https://console.groq.com/keys', description: 'Gratis, rapidísimo, buena cuota' },
+    groq: { name: 'Groq', endpoint: 'https://api.groq.com/openai/v1/chat/completions', visionModel: 'meta-llama/llama-4-scout-17b-16e-instruct', textModel: 'meta-llama/llama-4-scout-17b-16e-instruct', keyLabel: 'Groq API Key', keyPrefix: 'gsk_', keyLink: 'https://console.groq.com/keys', description: 'Gratis, rapidísimo, buena cuota' },
     openrouter: { name: 'OpenRouter', endpoint: 'https://openrouter.ai/api/v1/chat/completions', visionModel: 'google/gemini-2.0-flash-001:free', textModel: 'google/gemini-2.0-flash-001:free', keyLabel: 'OpenRouter Key', keyPrefix: 'sk-or-', keyLink: 'https://openrouter.ai/settings/keys', description: 'Multi-proveedor, modelos gratis' },
     gemini: { name: 'Gemini', endpoint: 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent', visionModel: 'gemini-2.0-flash', textModel: 'gemini-2.0-flash', keyLabel: 'Gemini API Key', keyPrefix: 'AIza', keyLink: 'https://aistudio.google.com/apikey', description: 'Google, puede tener cuota limitada' },
   } as const;
