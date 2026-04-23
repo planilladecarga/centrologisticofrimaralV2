@@ -1067,7 +1067,6 @@ export default function Pedidos({ inventoryData, onUpdateInventory }: PedidosPro
         const apiKey = aiApiKeys[aiProvider];
         if (apiKey.trim()) {
           try {
-            setAiError('Mejorando con IA...');
             const SYSTEM_PROMPT = `Eres un asistente de logística de centro de frío. EXTRAER datos de pedidos.
 CONTEXTO: SADETIR (DYSA 10330).
 REGLAS:
