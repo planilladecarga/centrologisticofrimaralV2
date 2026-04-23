@@ -167,7 +167,6 @@ export default function TemperatureMonitor() {
     // Strategy 1: Try direct PHP endpoint (works from internal network)
     try {
       const res = await fetch(SENSOR_URL, { 
-        method: 'POST',
         cache: 'no-store',
         signal: AbortSignal.timeout(5000),
       });
