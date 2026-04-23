@@ -605,6 +605,57 @@ export default function Pedidos({ inventoryData, onUpdateInventory }: PedidosPro
     }
   };
 
+  // Helper: extract clean error from Gemini API errors
+  const getCleanAIError = (err: any): string => {
+    const msg = err.message || String(err) || '';
+    // Parse JSON error blob from Gemini API
+    try {
+      const jsonMatch = msg.match(/\{.*"error".*\}/);
+      if (jsonMatch) {
+        const parsed = JSON.parse(jsonMatch[0]);
+        if (parsed.error?.status === 'RESOURCE_EXHAUSTED' || msg.includes('429') || msg.includes('quota') || msg.includes('Quota exceeded')) {
+          return 'Límite de uso alcanzado (quota). Esperá unos segundos y volvé a intentar. Si el problema persiste, necesitás una API Key con plan de pago o esperá hasta mañana (se reinicia el quota diario).';
+        }
+        if (parsed.error?.status === 'PERMISSION_DENIED' || parsed.error?.status === 'UNAUTHENTICATED') {
+          return 'API Key inválida o sin permisos. Verificá que la clave sea correcta en Configuración IA.';
+        }
+        if (parsed.error?.message) {
+          // Return just the short message, not the full JSON
+          return parsed.error.message.split('\n')[0];
+        }
+      }
+    } catch {}
+    // String-based fallback detection
+    if (msg.includes('429') || msg.includes('quota') || msg.includes('RESOURCE_EXHAUSTED')) {
+      return 'Límite de uso alcanzado (quota). Esperá unos segundos y volvé a intentar.';
+    }
+    if (msg.includes('API_KEY') || msg.includes('401') || msg.includes('403')) {
+      return 'API Key inválida. Verificá que la clave sea correcta en Configuración IA.';
+    }
+    if (msg.includes('CORS') || msg.includes('Failed to fetch')) {
+      return 'Error de conexión. Verificá tu conexión a internet.';
+    }
+    return msg.length > 120 ? msg.substring(0, 120) + '...' : msg;
+  };
+
+  const callGeminiWithRetry = async (ai: any, request: any, maxRetries = 2): Promise<any> => {
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        return await ai.models.generateContent(request);
+      } catch (err: any) {
+        const msg = err.message || String(err);
+        const isRateLimit = msg.includes('429') || msg.includes('quota') || msg.includes('RESOURCE_EXHAUSTED');
+        if (isRateLimit && attempt < maxRetries) {
+          const delay = Math.min(Math.pow(2, attempt) * 5000, 20000); // 5s, 10s
+          setAiError(prev => prev || `Límite de uso. Reintentando en ${delay / 1000}s... (${attempt + 1}/${maxRetries})`);
+          await new Promise(r => setTimeout(r, delay));
+          continue;
+        }
+        throw err;
+      }
+    }
+  };
+
   const processWithAI = useCallback(async (archivo: ArchivoAdjunto) => {
     if (!geminiApiKey.trim()) {
       setShowApiKeyInput(true);
@@ -643,7 +694,7 @@ Si no identifies productos, devuelve items vacío. Si no es un pedido, devuelve 
         // Image: use Gemini multimodal (vision)
         const base64Data = archivo.dataUrl.replace(/^data:image\/[^;]+;base64,/, '');
         const mimeType = archivo.tipo || 'image/jpeg';
-        const response = await ai.models.generateContent({
+        const response = await callGeminiWithRetry(ai, {
           model: 'gemini-2.0-flash',
           contents: [
             { role: 'user', parts: [
@@ -674,7 +725,7 @@ Si no identifies productos, devuelve items vacío. Si no es un pedido, devuelve 
         result.rawText = fullText;
         if (result.success && result.items.length === 0) {
           // Try with Gemini to interpret the text better
-          const response = await ai.models.generateContent({
+          const response = await callGeminiWithRetry(ai, {
             model: 'gemini-2.0-flash',
             contents: `Texto extraído del PDF:\n\n${fullText}\n\nExtrae datos del pedido. Solo JSON.`,
             config: { systemInstruction: SYSTEM_PROMPT },
@@ -698,7 +749,7 @@ Si no identifies productos, devuelve items vacío. Si no es un pedido, devuelve 
         const textRep = data.map((row, idx) =>
           `Fila ${idx + 1}: ${Object.entries(row).map(([k, v]) => `${k}=${v}`).join(', ')}`
         ).join('\n');
-        const response = await ai.models.generateContent({
+        const response = await callGeminiWithRetry(ai, {
           model: 'gemini-2.0-flash',
           contents: `Datos del Excel:\n\n${textRep}\n\nExtrae datos del pedido. Solo JSON.`,
           config: { systemInstruction: SYSTEM_PROMPT },
@@ -720,11 +771,10 @@ Si no identifies productos, devuelve items vacío. Si no es un pedido, devuelve 
       }
     } catch (err: any) {
       console.error('Error en extracción IA:', err);
-      if (err.message?.includes('API_KEY') || err.message?.includes('401') || err.message?.includes('403')) {
-        setAiError('API Key inválida. Verificá que la clave sea correcta en Configuración IA.');
+      const cleanError = getCleanAIError(err);
+      setAiError(cleanError);
+      if (cleanError.includes('API Key')) {
         setShowApiKeyInput(true);
-      } else {
-        setAiError(`Error de IA: ${err.message || 'Error desconocido'}`);
       }
     } finally {
       setAiProcessing(false);
