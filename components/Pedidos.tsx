@@ -1146,45 +1146,58 @@ RESPONDE SOLO JSON: {"cliente":"","items":[{"producto":"","contenedor":"","lote"
       .filter(Boolean);
 
     aiExtractedItems.forEach(ei => {
-      const searchProduct = ei.producto.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
       const searchContainer = (ei.contenedor || '').toUpperCase().trim();
       let bestMatch: any = null;
 
-      // Strategy 1: Match by container + product (most reliable)
-      const candidatesByContainer = searchContainer
-        ? inventoryData.filter(inv =>
-            (inv.contenedor || '').toUpperCase().trim() === searchContainer
-          )
-        : [];
-
-      for (const inv of candidatesByContainer) {
-        const invProduct = (inv.producto || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
-        if (invProduct === searchProduct || invProduct.includes(searchProduct) || searchProduct.includes(invProduct)) {
-          bestMatch = inv;
-          break;
+      // Strategy 1: Filter by container only — if container matches, use that inventory row
+      if (searchContainer) {
+        const candidatesByContainer = inventoryData.filter(inv =>
+          (inv.contenedor || '').toUpperCase().trim() === searchContainer
+        );
+        if (candidatesByContainer.length === 1) {
+          // Only one product in that container = exact match
+          bestMatch = candidatesByContainer[0];
+        } else if (candidatesByContainer.length > 1) {
+          // Multiple products in same container — try product name match
+          const searchProduct = (ei.producto || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]/g, '');
+          for (const inv of candidatesByContainer) {
+            const invProduct = (inv.producto || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]/g, '');
+            if (invProduct.includes(searchProduct) || searchProduct.includes(invProduct)) {
+              bestMatch = inv;
+              break;
+            }
+          }
+          // If still no product name match, take the first one
+          if (!bestMatch) bestMatch = candidatesByContainer[0];
         }
       }
 
-      // Strategy 2: If no container match, search by product name across all inventory
+      // Strategy 2: No container — search by product name across all inventory
       if (!bestMatch) {
+        const searchProduct = (ei.producto || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]/g, '');
         for (const inv of inventoryData) {
-          const invProduct = (inv.producto || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
-          if (invProduct === searchProduct) {
-            bestMatch = inv;
-            break;
-          }
+          const invProduct = (inv.producto || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]/g, '');
           if (invProduct.includes(searchProduct) || searchProduct.includes(invProduct)) {
             bestMatch = inv;
+            break;
           }
         }
       }
 
       if (bestMatch) {
         const existingInCart = newCartItems.find(c => c.inventoryId === bestMatch.id);
+        // Use pallets from extraction, but cajas/kilos from real inventory
+        const requestedPallets = ei.pallets || 1;
+        const invCajasPerPallet = Number(bestMatch.cantidad) || 0;
+        const invKilosPerPallet = Number(bestMatch.kilos) || 0;
+        // If inventory has pallets > 0, calculate ratio for cajas/kilos
+        const invTotalPallets = Number(bestMatch.pallets) || 1;
+        const ratio = Math.min(requestedPallets, invTotalPallets) / invTotalPallets;
+
         if (existingInCart) {
-          existingInCart.pallets += ei.pallets || 1;
-          existingInCart.cajas += ei.cajas || 0;
-          existingInCart.kilos += ei.kilos || 0;
+          existingInCart.pallets += requestedPallets;
+          existingInCart.cajas += Math.round(invCajasPerPallet * ratio);
+          existingInCart.kilos += Math.round(invKilosPerPallet * ratio * 10) / 10;
         } else {
           newCartItems.push({
             inventoryId: bestMatch.id,
@@ -1192,9 +1205,9 @@ RESPONDE SOLO JSON: {"cliente":"","items":[{"producto":"","contenedor":"","lote"
             contenedor: bestMatch.contenedor,
             lote: bestMatch.lote || '',
             cliente: bestMatch.cliente,
-            pallets: ei.pallets || 1,
-            cajas: ei.cajas || 0,
-            kilos: ei.kilos || 0,
+            pallets: requestedPallets,
+            cajas: Math.round(invCajasPerPallet * ratio),
+            kilos: Math.round(invKilosPerPallet * ratio * 10) / 10,
             maxPallets: Number(bestMatch.pallets) || 0,
             maxCajas: Number(bestMatch.cantidad) || 0,
             maxKilos: Number(bestMatch.kilos) || 0,
