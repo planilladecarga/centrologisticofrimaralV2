@@ -1070,25 +1070,49 @@ export default function Pedidos({ inventoryData, onUpdateInventory }: PedidosPro
             setAiError('Mejorando con IA...');
             const SYSTEM_PROMPT = `Eres un asistente de logística de centro de frío. EXTRAER datos de pedidos.
 CONTEXTO: SADETIR (DYSA 10330).
+REGLAS:
+- El campo "contenedor" es OBLIGATORIO en cada item. Es el número de contenedor (ej: TRLU1234567).
+- Si un contenedor aparece en el texto, TODOS los items del pedido van en ese contenedor.
+- "producto" es el nombre del producto exactamente como aparece.
+- "pallets" es la cantidad de pallets pedidos.
+- "cajas" es la cantidad de cajas por pallet.
+- "kilos" es el peso total en kilos.
 RESPONDE SOLO JSON: {"cliente":"","items":[{"producto":"","contenedor":"","lote":"","pallets":0,"cajas":0,"kilos":0}],"observaciones":""}`;
             const aiText = await callAIText(
-              `Texto extraído:\n\n${text.substring(0, 8000)}\n\nExtrae datos del pedido. Solo JSON.`,
+              `Texto extraído:\n\n${text.substring(0, 8000)}\n\nExtrae datos del pedido. IMPORTANTE: Incluí el contenedor en CADA item. Solo JSON.`,
               SYSTEM_PROMPT
             );
             if (aiText) {
               const aiResult = parseAIResponse(aiText);
-              if (aiResult.success && aiResult.items.length > result.items.length) {
+              if (aiResult.success && aiResult.items.length > 0) {
+                // Propagate container from regex extraction to AI items that lack it
+                const globalContainer = result.contenedor || '';
                 aiResult.items.forEach(item => {
-                  if (!item.contenedor && result.contenedor) item.contenedor = result.contenedor;
+                  if (!item.contenedor && globalContainer) item.contenedor = globalContainer;
                   if (!item.lote && result.lote) item.lote = result.lote;
-                  if (!aiResult.cliente && result.cliente) aiResult.cliente = result.cliente;
                 });
-                result = { ...aiResult, rawText: text.substring(0, 2000) };
+                // Use AI result if it found more items, otherwise merge
+                if (aiResult.items.length >= result.items.length) {
+                  result = { ...aiResult, rawText: text.substring(0, 2000) };
+                } else {
+                  // AI found fewer items, add container from AI to regex items
+                  result.items.forEach(item => {
+                    if (!item.contenedor && globalContainer) item.contenedor = globalContainer;
+                  });
+                }
               }
             }
           } catch (aiErr: any) {
             console.warn('AI enhancement failed, using native result:', aiErr.message);
           }
+        }
+
+        // Ensure all items have container from global extraction
+        const globalCont = result.contenedor || '';
+        if (globalCont) {
+          result.items.forEach(item => {
+            if (!item.contenedor) item.contenedor = globalCont;
+          });
         }
 
         setAiExtractedItems(result.items);
@@ -1117,29 +1141,44 @@ RESPONDE SOLO JSON: {"cliente":"","items":[{"producto":"","contenedor":"","lote"
     let matchedCount = 0;
     let unmatchedItems: string[] = [];
 
+    // Collect all containers mentioned in the extraction
+    const extractedContainers = aiExtractedItems
+      .map(ei => (ei.contenedor || '').toUpperCase().trim())
+      .filter(Boolean);
+
     aiExtractedItems.forEach(ei => {
-      const searchTerm = ei.producto.toLowerCase().trim();
+      const searchProduct = ei.producto.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+      const searchContainer = (ei.contenedor || '').toUpperCase().trim();
       let bestMatch: any = null;
-      let bestScore = 0;
 
-      inventoryData.forEach(inv => {
-        const invProduct = (inv.producto || '').toLowerCase().trim();
-        if (!invProduct) return;
+      // Strategy 1: Match by container + product (most reliable)
+      const candidatesByContainer = searchContainer
+        ? inventoryData.filter(inv =>
+            (inv.contenedor || '').toUpperCase().trim() === searchContainer
+          )
+        : [];
 
-        if (invProduct === searchTerm) {
+      for (const inv of candidatesByContainer) {
+        const invProduct = (inv.producto || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+        if (invProduct === searchProduct || invProduct.includes(searchProduct) || searchProduct.includes(invProduct)) {
           bestMatch = inv;
-          bestScore = 100;
-          return;
+          break;
         }
+      }
 
-        if (invProduct.includes(searchTerm) || searchTerm.includes(invProduct)) {
-          const score = Math.min(searchTerm.length, invProduct.length) / Math.max(searchTerm.length, invProduct.length);
-          if (score > bestScore && score > 0.5) {
-            bestScore = score;
+      // Strategy 2: If no container match, search by product name across all inventory
+      if (!bestMatch) {
+        for (const inv of inventoryData) {
+          const invProduct = (inv.producto || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+          if (invProduct === searchProduct) {
+            bestMatch = inv;
+            break;
+          }
+          if (invProduct.includes(searchProduct) || searchProduct.includes(invProduct)) {
             bestMatch = inv;
           }
         }
-      });
+      }
 
       if (bestMatch) {
         const existingInCart = newCartItems.find(c => c.inventoryId === bestMatch.id);
@@ -1151,8 +1190,8 @@ RESPONDE SOLO JSON: {"cliente":"","items":[{"producto":"","contenedor":"","lote"
           newCartItems.push({
             inventoryId: bestMatch.id,
             producto: bestMatch.producto,
-            contenedor: ei.contenedor || bestMatch.contenedor,
-            lote: ei.lote || bestMatch.lote || '',
+            contenedor: bestMatch.contenedor,
+            lote: bestMatch.lote || '',
             cliente: bestMatch.cliente,
             pallets: ei.pallets || 1,
             cajas: ei.cajas || 0,
