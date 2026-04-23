@@ -580,7 +580,7 @@ export default function Pedidos({ inventoryData, onUpdateInventory }: PedidosPro
   }, []);
 
   // ── Native text extraction from file ──
-  const extractTextFromFile = async (archivo: ArchivoAdjunto, onProgress?: (msg: string) => void): Promise<{ text: string; isTabular: boolean; rows?: any[]; needsGemini?: boolean }> => {
+  const extractTextFromFile = async (archivo: ArchivoAdjunto, onProgress?: (msg: string) => void): Promise<{ text: string; isTabular: boolean; rows?: any[]; needsGemini?: boolean; quotaExceeded?: boolean }> => {
     if (archivo.tipo.startsWith('image/')) {
       // Images need Gemini Vision API (tesseract.js is too heavy for GitHub Pages)
       onProgress?.('Procesando imagen...');
@@ -606,9 +606,9 @@ export default function Pedidos({ inventoryData, onUpdateInventory }: PedidosPro
         return { text: response.text || '', isTabular: false };
       } catch (err: any) {
         const msg = err.message || String(err);
-        // If quota exceeded, return partial error text so regex can still try
-        if (msg.includes('429') || msg.includes('quota')) {
-          return { text: '', isTabular: false, needsGemini: true };
+        // If quota exceeded, report it separately (not "needs API key")
+        if (msg.includes('429') || msg.includes('quota') || msg.includes('RESOURCE_EXHAUSTED')) {
+          return { text: '', isTabular: false, quotaExceeded: true };
         }
         throw err;
       }
@@ -929,15 +929,13 @@ export default function Pedidos({ inventoryData, onUpdateInventory }: PedidosPro
     return msg.length > 120 ? msg.substring(0, 120) + '...' : msg;
   };
 
-  const callGeminiWithRetry = async (ai: any, request: any, maxRetries = 2): Promise<any> => {
+  const callGeminiWithRetry = async (ai: any, request: any, maxRetries = 0): Promise<any> => {
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       try {
         return await ai.models.generateContent(request);
       } catch (err: any) {
-        const msg = err.message || String(err);
-        const isRateLimit = msg.includes('429') || msg.includes('quota') || msg.includes('RESOURCE_EXHAUSTED');
-        if (isRateLimit && attempt < maxRetries) {
-          await new Promise(r => setTimeout(r, Math.pow(2, attempt) * 5000));
+        if (attempt < maxRetries) {
+          await new Promise(r => setTimeout(r, 3000));
           continue;
         }
         throw err;
@@ -957,7 +955,7 @@ export default function Pedidos({ inventoryData, onUpdateInventory }: PedidosPro
       // Step 1: Extract text from file (OCR for images, pdfjs for PDF, xlsx for Excel)
       let result: ExtractResult;
 
-      const { text, isTabular, rows, needsGemini } = await extractTextFromFile(archivo, (msg) => {
+      const { text, isTabular, rows, needsGemini, quotaExceeded } = await extractTextFromFile(archivo, (msg) => {
         setAiError(msg);
       });
       setAiError('');
@@ -965,6 +963,11 @@ export default function Pedidos({ inventoryData, onUpdateInventory }: PedidosPro
       if (needsGemini) {
         setAiError('Para analizar imágenes necesitás configurar la API Key de Gemini. Hacé clic en "Gemini (opcional)" arriba, pegá la clave y volvé a intentar. La clave es GRATIS en aistudio.google.com/apikey');
         setShowApiKeyInput(true);
+        return;
+      }
+
+      if (quotaExceeded) {
+        setAiError('Límite de uso de Gemini alcanzado (429). Tu API key es correcta pero agotaste la cuota gratuita. Esperá hasta mañana o generá una nueva API Key en aistudio.google.com/apikey. Para PDF y Excel no necesitás API Key.');
         return;
       }
 
