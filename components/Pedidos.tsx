@@ -580,20 +580,38 @@ export default function Pedidos({ inventoryData, onUpdateInventory }: PedidosPro
   }, []);
 
   // ── Native text extraction from file ──
-  const extractTextFromFile = async (archivo: ArchivoAdjunto, onProgress?: (msg: string) => void): Promise<{ text: string; isTabular: boolean; rows?: any[] }> => {
+  const extractTextFromFile = async (archivo: ArchivoAdjunto, onProgress?: (msg: string) => void): Promise<{ text: string; isTabular: boolean; rows?: any[]; needsGemini?: boolean }> => {
     if (archivo.tipo.startsWith('image/')) {
-      onProgress?.('Leyendo imagen con OCR...');
-      const Tesseract = await import('tesseract.js');
-      const base64Data = archivo.dataUrl.replace(/^data:image\/[^;]+;base64,/, '');
-      const result = await Tesseract.recognize(base64Data, 'spa+eng', {
-        logger: (m: any) => {
-          if (m.status === 'recognizing text') {
-            const pct = Math.round((m.progress || 0) * 100);
-            onProgress?.(`OCR leyendo imagen... ${pct}%`);
-          }
-        },
-      });
-      return { text: result.data.text, isTabular: false };
+      // Images need Gemini Vision API (tesseract.js is too heavy for GitHub Pages)
+      onProgress?.('Procesando imagen...');
+      // If no Gemini API key, signal that we need one
+      if (!geminiApiKey.trim()) {
+        return { text: '', isTabular: false, needsGemini: true };
+      }
+      // Use Gemini Vision to extract text from image
+      try {
+        onProgress?.('Analizando imagen con IA...');
+        const ai = new GoogleGenAI({ apiKey: geminiApiKey.trim() });
+        const base64Data = archivo.dataUrl.replace(/^data:image\/[^;]+;base64,/, '');
+        const mimeType = archivo.tipo || 'image/jpeg';
+        const response = await callGeminiWithRetry(ai, {
+          model: 'gemini-2.0-flash',
+          contents: [
+            { role: 'user', parts: [
+              { inlineData: { data: base64Data, mimeType } },
+              { text: 'Leé todo el texto de esta imagen y devolvelo tal cual aparece, sin cambiar nada. Si hay una tabla, reproduci los datos en formato texto con separadores.' },
+            ]},
+          ],
+        });
+        return { text: response.text || '', isTabular: false };
+      } catch (err: any) {
+        const msg = err.message || String(err);
+        // If quota exceeded, return partial error text so regex can still try
+        if (msg.includes('429') || msg.includes('quota')) {
+          return { text: '', isTabular: false, needsGemini: true };
+        }
+        throw err;
+      }
     }
 
     if (archivo.tipo.includes('pdf') || archivo.nombre.endsWith('.pdf')) {
@@ -939,10 +957,16 @@ export default function Pedidos({ inventoryData, onUpdateInventory }: PedidosPro
       // Step 1: Extract text from file (OCR for images, pdfjs for PDF, xlsx for Excel)
       let result: ExtractResult;
 
-      const { text, isTabular, rows } = await extractTextFromFile(archivo, (msg) => {
+      const { text, isTabular, rows, needsGemini } = await extractTextFromFile(archivo, (msg) => {
         setAiError(msg);
       });
       setAiError('');
+
+      if (needsGemini) {
+        setAiError('Para analizar imágenes necesitás configurar la API Key de Gemini. Hacé clic en "Gemini (opcional)" arriba, pegá la clave y volvé a intentar. La clave es GRATIS en aistudio.google.com/apikey');
+        setShowApiKeyInput(true);
+        return;
+      }
 
       if (!text.trim()) {
         setAiError('No se pudo extraer texto del archivo. Probá con una captura más clara.');
