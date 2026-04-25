@@ -68,6 +68,13 @@ interface Order {
   createdAt: string;
   updatedAt: string;
   observaciones: string;
+  // Transport data
+  chofer: string;
+  patente: string;
+  transporte: string;
+  celular: string;
+  // Client notification
+  clienteTelefono: string;
 }
 
 interface DespachosRealProps {
@@ -141,6 +148,7 @@ export default function DespachosReal({
   // Queue Section
   const [dispatchTarget, setDispatchTarget] = useState<string | null>(null);
   const [isDispatching, setIsDispatching] = useState(false);
+  const [transportForm, setTransportForm] = useState({ chofer: '', patente: '', transporte: '', celular: '', clienteTelefono: '' });
 
   // History Section
   const [historyFilter, setHistoryFilter] = useState<'hoy' | 'semana' | 'mes' | 'todos'>('todos');
@@ -625,15 +633,43 @@ export default function DespachosReal({
       const targetOrder = orders.find(o => o.id === dispatchTarget);
       if (!targetOrder) { setIsDispatching(false); return; }
 
-      // Update order status
-      const dispatchedOrder = { ...targetOrder, estado: 'DESPACHADO' as const, updatedAt: new Date().toISOString() };
+      // Update order status with transport data
+      const dispatchedOrder = {
+        ...targetOrder,
+        estado: 'DESPACHADO' as const,
+        updatedAt: new Date().toISOString(),
+        chofer: transportForm.chofer.trim().toUpperCase(),
+        patente: transportForm.patente.trim().toUpperCase(),
+        transporte: transportForm.transporte.trim().toUpperCase(),
+        celular: transportForm.celular.trim(),
+        clienteTelefono: transportForm.clienteTelefono.trim(),
+      };
       const updatedOrders = orders.map(o =>
         o.id === dispatchTarget ? dispatchedOrder : o
       );
       setOrders(updatedOrders);
       saveOrders(updatedOrders);
 
-      // Deduct inventory
+      // Send WhatsApp notification if phone provided
+      const phone = transportForm.clienteTelefono.trim().replace(/[^0-9]/g, '');
+      if (phone.length >= 8) {
+        const totalPallets = targetOrder.items.reduce((s, i) => s + (i.palletsRequested || 1), 0);
+        const totalKilos = targetOrder.items.reduce((s, i) => s + i.kilos, 0);
+        const msg = encodeURIComponent(
+          `*FRIMARAL* - Centro Logistico\n\n` +
+          `Pedido *${targetOrder.orderNumber}* - DESPACHADO\n` +
+          `Cliente: ${targetOrder.cliente}\n` +
+          `Pallets: ${totalPallets} | Kg: ${totalKilos.toFixed(1)}\n` +
+          `Chofer: ${transportForm.chofer.trim().toUpperCase()}\n` +
+          `Patente: ${transportForm.patente.trim().toUpperCase()}\n` +
+          `Transporte: ${transportForm.transporte.trim().toUpperCase()}\n\n` +
+          `Fecha: ${new Date().toLocaleDateString('es-ES')}`
+        );
+        const waUrl = `https://wa.me/598${phone.startsWith('0') ? phone.slice(1) : phone}?text=${msg}`;
+        window.open(waUrl, '_blank');
+      }
+
+      // Deduct inventory - calculate per-pallet averages BEFORE modifying
       const itemsToDeduct = targetOrder.items;
       const updatedInventory = [...inventoryData];
       for (const orderItem of itemsToDeduct) {
@@ -643,9 +679,13 @@ export default function DespachosReal({
           const orderKey = `${orderItem.contenedor}|${orderItem.lote}|${orderItem.producto}`;
           if (matchKey === orderKey && inv.pallets > 0) {
             const deduct = Math.min(orderItem.palletsRequested || 1, inv.pallets);
+            // Calculate per-pallet averages before deducting
+            const cajasPerPallet = inv.pallets > 0 ? (inv.cantidad || 0) / inv.pallets : 0;
+            const kilosPerPallet = inv.pallets > 0 ? (inv.kilos || 0) / inv.pallets : 0;
+            // Now deduct
             inv.pallets = Math.max(0, inv.pallets - deduct);
-            inv.cantidad = Math.max(0, (inv.cantidad || 0) - deduct * Math.round((inv.cantidad || 0) / Math.max(inv.pallets + deduct, 1)));
-            inv.kilos = Math.max(0, (inv.kilos || 0) - deduct * Math.round((inv.kilos || 0) / Math.max(inv.pallets + deduct, 1)));
+            inv.cantidad = Math.max(0, Math.round(inv.pallets * cajasPerPallet * 100) / 100);
+            inv.kilos = Math.max(0, Math.round(inv.pallets * kilosPerPallet * 100) / 100);
             break;
           }
         }
@@ -655,16 +695,18 @@ export default function DespachosReal({
       const cleanedInventory = updatedInventory.filter(item => item.pallets > 0);
       onUpdateInventory(cleanedInventory);
 
-      setDispatchTarget(null);
-
       // Auto-generate remito de dos vías after dispatch
       setTimeout(() => printRemito(dispatchedOrder), 300);
+
+      // Clear transport form and close modal
+      setTransportForm({ chofer: '', patente: '', transporte: '', celular: '', clienteTelefono: '' });
+      setDispatchTarget(null);
     } catch (error) {
       console.error("Error dispatching order:", error);
     } finally {
       setIsDispatching(false);
     }
-  }, [dispatchTarget, orders, inventoryData, onUpdateInventory]);
+  }, [dispatchTarget, orders, inventoryData, onUpdateInventory, transportForm]);
 
   // ─── HISTORY LOGIC ──────────────────────────────────────────────────────────
 
@@ -855,6 +897,25 @@ export default function DespachosReal({
             <div class="value">${order.observaciones || '-'}</div>
           </div>
         </div>
+        ${(order.chofer || order.patente || order.transporte) ? `
+        <div class="meta-grid">
+          <div class="meta-box">
+            <div class="label">Chofer</div>
+            <div class="value">${order.chofer || '-'}</div>
+          </div>
+          <div class="meta-box">
+            <div class="label">Patente</div>
+            <div class="value">${order.patente || '-'}</div>
+          </div>
+          <div class="meta-box">
+            <div class="label">Transporte</div>
+            <div class="value">${order.transporte || '-'}</div>
+          </div>
+          <div class="meta-box">
+            <div class="label">Celular</div>
+            <div class="value">${order.celular || '-'}</div>
+          </div>
+        </div>` : ''}
 
         <table>
           <thead>
@@ -1334,17 +1395,68 @@ export default function DespachosReal({
               </div>
             )}
 
-            <ConfirmModal
-              open={dispatchTarget !== null}
-              title="Confirmar Despacho"
-              message="¿Confirma el despacho de este pedido? El inventario será actualizado automáticamente y el estado cambiará a DESPACHADO. Esta acción no se puede deshacer."
-              confirmLabel="Sí, Despachar"
-              cancelLabel="Cancelar"
-              variant="warning"
-              loading={isDispatching}
-              onConfirm={handleDispatch}
-              onCancel={() => setDispatchTarget(null)}
-            />
+            {/* Dispatch confirmation with transport data */}
+            {dispatchTarget !== null && (
+              <div className="fixed inset-0 z-50 flex items-center justify-center p-4 animate-fade-in">
+                <div className="absolute inset-0 bg-black/50" onClick={() => setDispatchTarget(null)} />
+                <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-lg animate-modal-in">
+                  <div className="p-6 border-b border-neutral-200">
+                    <h2 className="text-lg font-mono font-bold uppercase tracking-widest text-neutral-900">Confirmar Despacho</h2>
+                    <p className="text-xs font-mono text-neutral-500 mt-1">Complete los datos del transporte</p>
+                  </div>
+                  <div className="p-6 space-y-3">
+                    <div>
+                      <label className="block text-[10px] font-mono uppercase tracking-widest text-neutral-500 mb-1">Chofer / Conductor</label>
+                      <input type="text" value={transportForm.chofer} onChange={e => setTransportForm({...transportForm, chofer: e.target.value})}
+                        placeholder="NOMBRE DEL CHOFER"
+                        className="w-full p-2.5 text-xs font-mono uppercase bg-neutral-50 border border-neutral-200 focus:border-blue-500 outline-none rounded-lg placeholder:text-neutral-400" />
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-[10px] font-mono uppercase tracking-widest text-neutral-500 mb-1">Patente</label>
+                        <input type="text" value={transportForm.patente} onChange={e => setTransportForm({...transportForm, patente: e.target.value.toUpperCase()})}
+                          placeholder="ABC-123"
+                          className="w-full p-2.5 text-xs font-mono uppercase bg-neutral-50 border border-neutral-200 focus:border-blue-500 outline-none rounded-lg placeholder:text-neutral-400" />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-mono uppercase tracking-widest text-neutral-500 mb-1">Celular</label>
+                        <input type="tel" value={transportForm.celular} onChange={e => setTransportForm({...transportForm, celular: e.target.value})}
+                          placeholder="099123456"
+                          className="w-full p-2.5 text-xs font-mono bg-neutral-50 border border-neutral-200 focus:border-blue-500 outline-none rounded-lg placeholder:text-neutral-400" />
+                      </div>
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-mono uppercase tracking-widest text-neutral-500 mb-1">Transporte / Empresa</label>
+                      <input type="text" value={transportForm.transporte} onChange={e => setTransportForm({...transportForm, transporte: e.target.value})}
+                        placeholder="NOMBRE DEL TRANSPORTE"
+                        className="w-full p-2.5 text-xs font-mono uppercase bg-neutral-50 border border-neutral-200 focus:border-blue-500 outline-none rounded-lg placeholder:text-neutral-400" />
+                    </div>
+                    <div className="border-t border-neutral-200 pt-3 mt-1">
+                      <label className="block text-[10px] font-mono uppercase tracking-widest text-green-700 mb-1">Celular Cliente (WhatsApp)</label>
+                      <input type="tel" value={transportForm.clienteTelefono} onChange={e => setTransportForm({...transportForm, clienteTelefono: e.target.value})}
+                        placeholder="099123456 (opcional - notifica al cliente)"
+                        className="w-full p-2.5 text-xs font-mono bg-green-50 border border-green-200 focus:border-green-500 outline-none rounded-lg placeholder:text-neutral-400" />
+                      <p className="text-[9px] font-mono text-neutral-400 mt-1">Si se completa, se envia notificacion por WhatsApp al confirmar el despacho</p>
+                    </div>
+                  </div>
+                  <div className="p-6 border-t border-neutral-200 flex items-center justify-end gap-3">
+                    <button onClick={() => setDispatchTarget(null)}
+                      className="px-5 py-2.5 text-xs font-mono uppercase tracking-widest text-neutral-500 hover:text-neutral-900 transition-colors">
+                      Cancelar
+                    </button>
+                    <button onClick={handleDispatch} disabled={isDispatching || !transportForm.chofer.trim() || !transportForm.patente.trim()}
+                      className={`px-5 py-2.5 text-xs font-mono uppercase tracking-widest transition-colors flex items-center gap-2 ${
+                        isDispatching || !transportForm.chofer.trim() || !transportForm.patente.trim()
+                          ? 'bg-neutral-300 text-neutral-500 cursor-not-allowed'
+                          : 'bg-green-600 text-white hover:bg-green-700'
+                      }`}>
+                      <Truck className="w-4 h-4" />
+                      {isDispatching ? 'Despachando...' : 'Despachar'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         )}
 
@@ -1439,6 +1551,13 @@ export default function DespachosReal({
                               <span><span className="text-neutral-400">CLIENTE:</span> <span className="font-medium">{order.cliente}</span></span>
                               <span><span className="text-neutral-400">FECHA:</span> {formatDate(order.updatedAt)}</span>
                             </div>
+                            {(order.chofer || order.patente) && (
+                              <div className="flex items-center gap-4 mt-1 text-[10px] font-mono text-neutral-500">
+                                {order.chofer && <span><span className="text-neutral-400">CHOFER:</span> {order.chofer}</span>}
+                                {order.patente && <span><span className="text-neutral-400">PATENTE:</span> {order.patente}</span>}
+                                {order.transporte && <span><span className="text-neutral-400">TRANSPORTE:</span> {order.transporte}</span>}
+                              </div>
+                            )}
                             <div className="flex items-center gap-5 mt-1 text-[10px] font-mono text-neutral-500">
                               <span><span className="font-bold text-neutral-700">{totalPallets}</span> PAL</span>
                               <span><span className="font-bold text-neutral-700">{totalCajas}</span> CAJ</span>

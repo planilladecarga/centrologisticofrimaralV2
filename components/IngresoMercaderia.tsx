@@ -41,6 +41,7 @@ interface IngresoRecord {
 
 interface Props {
   inventoryData: InventoryItem[];
+  onUpdateInventory: (updatedData: InventoryItem[]) => void;
 }
 
 const INGRESO_HISTORY_KEY = 'frimaral_ingreso_history_v1';
@@ -346,7 +347,7 @@ function ProductDropdown({
 }
 
 /* ─── Main Component ─── */
-export default function IngresoMercaderia({ inventoryData }: Props) {
+export default function IngresoMercaderia({ inventoryData, onUpdateInventory }: Props) {
   const [history, setHistory] = useState<IngresoRecord[]>([]);
   const [productCatalog, setProductCatalog] = useState<CatalogEntry[]>([]);
   const [showForm, setShowForm] = useState(false);
@@ -646,7 +647,42 @@ export default function IngresoMercaderia({ inventoryData }: Props) {
           };
           const updated = [newRecord, ...history].slice(0, 100);
           saveHistory(updated);
-          setToastMessage({ text: '¡Ingreso confirmado exitosamente!', type: 'success' });
+
+          // Update live inventory - add received items to stock
+          try {
+            const currentInventory = [...inventoryData];
+            for (const line of newRecord.lineas) {
+              if (!line.producto.trim()) continue;
+              const matchIdx = currentInventory.findIndex(inv =>
+                inv.contenedor?.trim().toUpperCase() === line.contenedor.trim().toUpperCase() &&
+                inv.producto.trim().toUpperCase() === line.producto.trim().toUpperCase() &&
+                (inv.lote || '').trim().toUpperCase() === line.lote.trim().toUpperCase()
+              );
+              if (matchIdx >= 0) {
+                // Existing item - accumulate quantities
+                currentInventory[matchIdx].pallets = (currentInventory[matchIdx].pallets || 0) + line.pallets;
+                currentInventory[matchIdx].cantidad = (currentInventory[matchIdx].cantidad || 0) + line.cajas;
+                currentInventory[matchIdx].kilos = (currentInventory[matchIdx].kilos || 0) + line.kilos;
+              } else {
+                // New item - add to inventory
+                currentInventory.push({
+                  id: crypto.randomUUID(),
+                  cliente: displayCliente,
+                  producto: line.producto.trim().toUpperCase(),
+                  contenedor: line.contenedor.trim().toUpperCase(),
+                  lote: line.lote.trim().toUpperCase(),
+                  pallets: line.pallets,
+                  cantidad: line.cajas,
+                  kilos: line.kilos,
+                });
+              }
+            }
+            onUpdateInventory(currentInventory);
+          } catch (invErr) {
+            console.error('Error actualizando inventario desde ingreso:', invErr);
+          }
+
+          setToastMessage({ text: '¡Ingreso confirmado y stock actualizado!', type: 'success' });
           resetForm();
         } catch (error) {
           console.error('Error guardando ingreso:', error);

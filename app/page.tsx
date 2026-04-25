@@ -11,11 +11,10 @@ import { printContent } from '../lib/printUtils';
 import LoadingScreen from '../components/LoadingScreen';
 import ConfirmModal from '../components/ConfirmModal';
 
-const PdfProcessor = dynamic(() => import('../components/PdfProcessor'), { ssr: false });
-const TemperatureMonitor = dynamic(() => import('../components/TemperatureMonitor'), { ssr: false });
 const DespachosReal = dynamic(() => import('../components/DespachosReal'), { ssr: false });
 const Pedidos = dynamic(() => import('../components/Pedidos'), { ssr: false });
 const IngresoMercaderia = dynamic(() => import('../components/IngresoMercaderia'), { ssr: false });
+const TemperatureMonitor = dynamic(() => import('../components/TemperatureMonitor'), { ssr: false });
 
 interface ActivityRecord {
   id?: string;
@@ -1219,7 +1218,10 @@ export default function DashboardInner() {
 
         {/* ===== INGRESOS ===== */}
         {activeTab === 'ingresos' && (
-          <IngresoMercaderia inventoryData={inventoryData} />
+          <IngresoMercaderia
+            inventoryData={inventoryData}
+            onUpdateInventory={(data: any[]) => { setInventoryData(data); localStorage.setItem(INVENTORY_CACHE_KEY, JSON.stringify(data)); }}
+          />
         )}
 
         {/* ===== DESPACHOS ===== */}
