@@ -4,7 +4,7 @@ import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react'
 import dynamic from 'next/dynamic';
 import { useToast } from '../contexts/ToastContext';
 import { useTheme } from '../contexts/ThemeContext';
-import { useAuth } from '../contexts/AuthContext';
+import { useAuth, type Role } from '../contexts/AuthContext';
 import { useAuditLog, type AuditEntry } from '../contexts/AuditLogContext';
 import { exportInventoryExcel, exportDashboardSummary, exportAuditLogExcel } from '../lib/exportUtils';
 import { printContent } from '../lib/printUtils';
@@ -32,7 +32,14 @@ const ORDERS_CACHE_KEY = 'frimaral_orders_v2';
 export default function DashboardInner() {
   const { showToast } = useToast();
   const { theme, toggleTheme } = useTheme();
-  const { role, setRole, canCreate, canDelete, canReset, canConfig } = useAuth();
+  const { currentUser, isLoggedIn, login, logout, role, setOperatorName, canCreate, canDelete, canReset, canConfig, users, createUser, deleteUser, updateUserRole, updatePassword } = useAuth();
+  const [loginUsername, setLoginUsername] = useState('');
+  const [loginPassword, setLoginPassword] = useState('');
+  const [loginError, setLoginError] = useState('');
+  const [newUser, setNewUser] = useState({ username: '', password: '', displayName: '', role: 'OPERADOR' as Role });
+  const [userMgmtError, setUserMgmtError] = useState('');
+  const [editingUserId, setEditingUserId] = useState<string | null>(null);
+  const [editingPassword, setEditingPassword] = useState('');
   const { entries: auditEntries, logAction, clearLog } = useAuditLog();
   const INVENTORY_CACHE_KEY = 'frimaral_inventory_cache_v1';
   const ACTIVITY_CACHE_KEY = 'frimaral_activity_cache_v1';
@@ -52,7 +59,7 @@ export default function DashboardInner() {
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [searchFocused, setSearchFocused] = useState(false);
   const [searchHighlightIdx, setSearchHighlightIdx] = useState(0);
-  const [operatorName, setOperatorName] = useState('');
+  const [operatorName, setOperatorNameLocal] = useState('');
   const [auditModuleFilter, setAuditModuleFilter] = useState('todos');
 
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -67,10 +74,10 @@ export default function DashboardInner() {
     observaciones: ''
   });
 
-  // Load operator name
+  // Sync operator name from auth
   useEffect(() => {
-    try { setOperatorName(localStorage.getItem('frimaral_operator_name') || ''); } catch {}
-  }, []);
+    if (currentUser) setOperatorNameLocal(currentUser.displayName);
+  }, [currentUser]);
 
   // Mark loading done after first data load
   useEffect(() => {
@@ -546,9 +553,112 @@ export default function DashboardInner() {
   };
 
   const handleSaveOperatorName = () => {
-    localStorage.setItem('frimaral_operator_name', operatorName.trim());
-    showToast('Nombre de operador guardado.', 'success');
+    if (operatorName.trim()) {
+      setOperatorName(operatorName.trim());
+      showToast('Nombre de operador guardado.', 'success');
+    }
   };
+
+  const handleLogin = () => {
+    const ok = login(loginUsername, loginPassword);
+    if (ok) {
+      setLoginUsername('');
+      setLoginPassword('');
+      setLoginError('');
+      showToast('Sesión iniciada correctamente.', 'success');
+    } else {
+      setLoginError('Usuario o contraseña incorrectos');
+    }
+  };
+
+  const handleCreateUser = () => {
+    const result = createUser(newUser.username, newUser.password, newUser.displayName, newUser.role);
+    if (result.ok) {
+      showToast(`Usuario "${newUser.username}" creado con rol ${newUser.role}.`, 'success');
+      setNewUser({ username: '', password: '', displayName: '', role: 'OPERADOR' });
+      setUserMgmtError('');
+    } else {
+      setUserMgmtError(result.error || 'Error al crear usuario');
+    }
+  };
+
+  const handleDeleteUser = (userId: string, username: string) => {
+    const result = deleteUser(userId);
+    if (result.ok) {
+      showToast(`Usuario "${username}" eliminado.`, 'success');
+    } else {
+      showToast(result.error || 'Error al eliminar', 'error');
+    }
+  };
+
+  const handleChangeRole = (userId: string, newRole: Role) => {
+    updateUserRole(userId, newRole);
+    showToast('Rol actualizado.', 'success');
+  };
+
+  const handleChangePassword = (userId: string) => {
+    if (!editingPassword || editingPassword.length < 4) {
+      setUserMgmtError('La contraseña debe tener al menos 4 caracteres');
+      return;
+    }
+    const result = updatePassword(userId, editingPassword);
+    if (result.ok) {
+      showToast('Contraseña actualizada.', 'success');
+      setEditingUserId(null);
+      setEditingPassword('');
+      setUserMgmtError('');
+    } else {
+      setUserMgmtError(result.error || 'Error al cambiar contraseña');
+    }
+  };
+
+  // Login screen
+  if (!isLoggedIn) {
+    return (
+      <div className="h-screen bg-neutral-100 dark:bg-neutral-900 flex items-center justify-center p-4">
+        <div className="w-full max-w-sm animate-fade-in">
+          <div className="bg-white dark:bg-neutral-800 rounded-2xl border border-neutral-200 dark:border-neutral-700 p-8 shadow-lg">
+            <div className="text-center mb-8">
+              <div className="w-14 h-14 rounded-xl bg-gradient-to-br from-blue-600 to-blue-800 flex items-center justify-center mx-auto mb-4">
+                <svg className="w-7 h-7 text-white" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" /></svg>
+              </div>
+              <h1 className="text-xl font-mono tracking-widest text-neutral-900 dark:text-neutral-100 uppercase">Frimaral</h1>
+              <p className="text-[10px] font-mono uppercase tracking-widest text-neutral-500 mt-1">Centro Logistico</p>
+            </div>
+
+            <div className="space-y-4">
+              <div>
+                <label className="block text-[10px] font-mono uppercase tracking-widest text-neutral-500 mb-1.5">Usuario</label>
+                <input type="text" value={loginUsername} onChange={e => setLoginUsername(e.target.value.toLowerCase())}
+                  onKeyDown={e => e.key === 'Enter' && handleLogin()}
+                  placeholder="USUARIO"
+                  className="w-full p-3 text-xs font-mono uppercase bg-neutral-50 dark:bg-neutral-700 border border-neutral-200 dark:border-neutral-600 focus:border-blue-500 outline-none placeholder:text-neutral-400 rounded-lg" />
+              </div>
+              <div>
+                <label className="block text-[10px] font-mono uppercase tracking-widest text-neutral-500 mb-1.5">Contrasena</label>
+                <input type="password" value={loginPassword} onChange={e => setLoginPassword(e.target.value)}
+                  onKeyDown={e => e.key === 'Enter' && handleLogin()}
+                  placeholder="CONTRASENA"
+                  className="w-full p-3 text-xs font-mono bg-neutral-50 dark:bg-neutral-700 border border-neutral-200 dark:border-neutral-600 focus:border-blue-500 outline-none placeholder:text-neutral-400 rounded-lg" />
+              </div>
+
+              {loginError && <p className="text-xs font-mono text-red-600 dark:text-red-400 animate-shake">{loginError}</p>}
+
+              <button onClick={handleLogin}
+                className="w-full p-3 bg-blue-600 text-white text-xs font-mono uppercase tracking-widest hover:bg-blue-700 transition-colors rounded-lg">
+                Iniciar Sesion
+              </button>
+
+              <p className="text-[9px] font-mono text-neutral-400 text-center mt-4">
+                Default: admin / admin123
+              </p>
+            </div>
+          </div>
+          <p className="mt-4 text-center text-[9px] font-mono uppercase tracking-widest text-neutral-400">Frimaral Centro Logistico v2.2</p>
+        </div>
+      </div>
+    );
+  }
 
   if (isLoading) return <LoadingScreen />;
 
@@ -586,15 +696,26 @@ export default function DashboardInner() {
           </button>
         ))}
       </nav>
-      <div className="p-4 border-t border-neutral-800 flex items-center justify-between">
-        <p className="text-[9px] font-mono uppercase tracking-widest text-neutral-700">v2.2</p>
-        <button onClick={toggleTheme} className="text-neutral-500 hover:text-white transition-colors" title={theme === 'dark' ? 'Modo Claro' : 'Modo Oscuro'}>
-          {theme === 'dark' ? (
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
-          ) : (
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
-          )}
-        </button>
+      <div className="p-4 border-t border-neutral-800 space-y-2">
+        <div className="flex items-center justify-between mb-2">
+          <div>
+            <p className="text-[10px] font-mono uppercase tracking-widest text-neutral-500 truncate max-w-[120px]">{currentUser?.displayName}</p>
+            <p className="text-[8px] font-mono uppercase tracking-widest text-neutral-700">{role}</p>
+          </div>
+          <button onClick={logout} className="text-neutral-500 hover:text-red-400 transition-colors" title="Cerrar sesion">
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" /></svg>
+          </button>
+        </div>
+        <div className="flex items-center justify-between">
+          <p className="text-[9px] font-mono uppercase tracking-widest text-neutral-700">v2.2</p>
+          <button onClick={toggleTheme} className="text-neutral-500 hover:text-white transition-colors" title={theme === 'dark' ? 'Modo Claro' : 'Modo Oscuro'}>
+            {theme === 'dark' ? (
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
+            ) : (
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+            )}
+          </button>
+        </div>
       </div>
     </>
   );
@@ -1150,22 +1271,92 @@ export default function DashboardInner() {
                 </div>
               </div>
 
-              {/* Role */}
+              {/* Usuarios */}
               <div className="bg-white dark:bg-neutral-800 rounded-xl border border-neutral-200 dark:border-neutral-700 p-6">
-                <h3 className="text-xs font-mono uppercase tracking-widest text-neutral-900 dark:text-neutral-100 mb-4 border-b border-neutral-200 dark:border-neutral-700 pb-3">Rol de Acceso</h3>
-                <div className="flex flex-wrap gap-2">
-                  {(['ADMIN', 'OPERADOR', 'LECTURA'] as const).map(r => (
-                    <button key={r} onClick={() => setRole(r)}
-                      className={`px-4 py-2 text-[11px] font-mono uppercase tracking-widest rounded-lg transition-colors ${
-                        role === r ? 'bg-neutral-900 text-white dark:bg-neutral-100 dark:text-neutral-900' : 'bg-neutral-200 dark:bg-neutral-700 text-neutral-700 dark:text-neutral-300'
-                      }`}>
-                      {r === 'ADMIN' ? '🔑' : r === 'OPERADOR' ? '👷' : '👁'} {r}
-                    </button>
+                <h3 className="text-xs font-mono uppercase tracking-widest text-neutral-900 dark:text-neutral-100 mb-4 border-b border-neutral-200 dark:border-neutral-700 pb-3">Gestion de Usuarios</h3>
+
+                {/* Lista de usuarios */}
+                <div className="space-y-2 mb-6">
+                  {users.map(u => (
+                    <div key={u.id} className={`flex items-center justify-between p-3 rounded-lg border ${u.id === currentUser?.id ? 'border-blue-300 dark:border-blue-600 bg-blue-50 dark:bg-blue-950/20' : 'border-neutral-200 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-700/30'}`}>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs font-mono uppercase tracking-wider text-neutral-900 dark:text-neutral-100">{u.username}</span>
+                          <span className={`px-1.5 py-0.5 text-[8px] font-mono uppercase rounded ${
+                            u.role === 'ADMIN' ? 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300' :
+                            u.role === 'OPERADOR' ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300' :
+                            'bg-neutral-200 dark:bg-neutral-600 text-neutral-600 dark:text-neutral-300'
+                          }`}>{u.role}</span>
+                          {u.id === currentUser?.id && <span className="text-[8px] font-mono text-blue-500">(vos)</span>}
+                        </div>
+                        <p className="text-[10px] font-mono text-neutral-500 dark:text-neutral-400 truncate">{u.displayName}</p>
+                        {editingUserId === u.id && (
+                          <div className="flex gap-2 mt-2">
+                            <input type="password" value={editingPassword} onChange={e => setEditingPassword(e.target.value)} placeholder="Nueva contrasena"
+                              className="flex-1 p-1.5 text-[10px] font-mono bg-white dark:bg-neutral-600 border border-neutral-200 dark:border-neutral-500 outline-none rounded" />
+                            <button onClick={() => handleChangePassword(u.id)} className="px-2 py-1.5 text-[10px] font-mono bg-blue-600 text-white rounded hover:bg-blue-700">Guardar</button>
+                            <button onClick={() => { setEditingUserId(null); setEditingPassword(''); }} className="px-2 py-1.5 text-[10px] font-mono bg-neutral-300 dark:bg-neutral-600 text-neutral-700 dark:text-neutral-200 rounded hover:bg-neutral-400">X</button>
+                          </div>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-1 ml-2 flex-shrink-0">
+                        <select value={u.role} onChange={e => handleChangeRole(u.id, e.target.value as Role)}
+                          className="text-[9px] font-mono bg-white dark:bg-neutral-600 border border-neutral-200 dark:border-neutral-500 rounded px-1 py-1 outline-none">
+                          <option value="ADMIN">ADMIN</option>
+                          <option value="OPERADOR">OPERADOR</option>
+                          <option value="LECTURA">LECTURA</option>
+                        </select>
+                        {editingUserId !== u.id && (
+                          <button onClick={() => { setEditingUserId(u.id); setEditingPassword(''); setUserMgmtError(''); }} className="p-1 text-neutral-400 hover:text-blue-600 transition-colors" title="Cambiar contrasena">
+                            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg>
+                          </button>
+                        )}
+                        <button onClick={() => handleDeleteUser(u.id, u.username)}
+                          className={`p-1 transition-colors ${u.id === 'admin_default' || u.id === currentUser?.id ? 'text-neutral-300 dark:text-neutral-600 cursor-not-allowed' : 'text-neutral-400 hover:text-red-600'}`}
+                          disabled={u.id === 'admin_default' || u.id === currentUser?.id} title="Eliminar usuario">
+                          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                        </button>
+                      </div>
+                    </div>
                   ))}
                 </div>
-                <p className="mt-3 text-[10px] font-mono text-neutral-500 dark:text-neutral-400">
-                  {role === 'ADMIN' ? 'Acceso completo' : role === 'OPERADOR' ? 'Sin configuración ni reset' : 'Solo lectura'}
-                </p>
+
+                {/* Crear nuevo usuario */}
+                <div className="border-t border-neutral-200 dark:border-neutral-700 pt-4">
+                  <h4 className="text-[10px] font-mono uppercase tracking-widest text-neutral-500 mb-3">Crear Nuevo Usuario</h4>
+                  {userMgmtError && <p className="text-[10px] font-mono text-red-600 dark:text-red-400 mb-2 animate-shake">{userMgmtError}</p>}
+                  <div className="grid grid-cols-2 gap-2 mb-2">
+                    <div>
+                      <label className="block text-[9px] font-mono uppercase tracking-widest text-neutral-500 mb-1">Usuario</label>
+                      <input type="text" value={newUser.username} onChange={e => setNewUser({...newUser, username: e.target.value.toLowerCase()})}
+                        placeholder="USUARIO" className="w-full p-2 text-[10px] font-mono uppercase bg-neutral-50 dark:bg-neutral-700 border border-neutral-200 dark:border-neutral-600 outline-none rounded" />
+                    </div>
+                    <div>
+                      <label className="block text-[9px] font-mono uppercase tracking-widest text-neutral-500 mb-1">Contrasena</label>
+                      <input type="password" value={newUser.password} onChange={e => setNewUser({...newUser, password: e.target.value})}
+                        placeholder="****" className="w-full p-2 text-[10px] font-mono bg-neutral-50 dark:bg-neutral-700 border border-neutral-200 dark:border-neutral-600 outline-none rounded" />
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 mb-3">
+                    <div>
+                      <label className="block text-[9px] font-mono uppercase tracking-widest text-neutral-500 mb-1">Nombre</label>
+                      <input type="text" value={newUser.displayName} onChange={e => setNewUser({...newUser, displayName: e.target.value})}
+                        placeholder="NOMBRE COMPLETO" className="w-full p-2 text-[10px] font-mono uppercase bg-neutral-50 dark:bg-neutral-700 border border-neutral-200 dark:border-neutral-600 outline-none rounded" />
+                    </div>
+                    <div>
+                      <label className="block text-[9px] font-mono uppercase tracking-widest text-neutral-500 mb-1">Rol</label>
+                      <select value={newUser.role} onChange={e => setNewUser({...newUser, role: e.target.value as Role})}
+                        className="w-full p-2 text-[10px] font-mono bg-neutral-50 dark:bg-neutral-700 border border-neutral-200 dark:border-neutral-600 outline-none rounded">
+                        <option value="ADMIN">ADMIN</option>
+                        <option value="OPERADOR">OPERADOR</option>
+                        <option value="LECTURA">LECTURA</option>
+                      </select>
+                    </div>
+                  </div>
+                  <button onClick={handleCreateUser} className="w-full px-4 py-2 bg-blue-600 text-white text-[10px] font-mono uppercase tracking-widest hover:bg-blue-700 transition-colors rounded-lg">
+                    + Crear Usuario
+                  </button>
+                </div>
               </div>
 
               {/* Backup/Restore */}
