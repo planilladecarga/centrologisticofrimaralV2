@@ -1134,33 +1134,6 @@ export default function DashboardInner() {
         )}
 
         {/* ===== CONFIGURACIÓN ===== */}
-        {activeTab === 'configuracion' && (
-          <div className="p-8 flex-1 overflow-auto flex flex-col">
-            <div className="mb-8 border-b border-neutral-200 pb-6">
-              <h2 className="text-2xl font-light tracking-tight text-neutral-900 uppercase">Configuración del Sistema</h2>
-              <p className="text-xs font-mono text-neutral-500 mt-2 uppercase tracking-widest">Ajustes y mantenimiento de la plataforma</p>
-            </div>
-            <div className="max-w-3xl">
-              <div className="border border-red-200 bg-red-50 p-8">
-                <h3 className="text-sm font-mono uppercase tracking-widest text-red-900 mb-2">Zona de Peligro</h3>
-                <p className="text-xs font-sans text-red-700 mb-6">Las acciones en esta sección son irreversibles.</p>
-                <div className="flex items-center justify-between border-t border-red-200 pt-6">
-                  <div>
-                    <h4 className="text-xs font-mono uppercase tracking-widest text-red-900">Reseteo Total de Fábrica</h4>
-                    <p className="text-xs font-sans text-red-700 mt-1">Borra toda la base de datos de inventario ({inventoryData.length} registros actuales).</p>
-                  </div>
-                  <button onClick={() => setIsResetModalOpen(true)}
-                    className="px-5 py-2.5 bg-red-600 text-white text-xs font-mono uppercase tracking-widest hover:bg-red-700 transition-colors">
-                    Resetear Base de Datos
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* ===== MODAL RESETEO ===== */}
-        {/* ===== CONFIGURACIÓN ===== */}
         {activeTab === 'configuracion' && canConfig && (
           <div className="p-8 flex-1 overflow-auto">
             <h2 className="text-2xl font-light tracking-tight text-neutral-900 dark:text-neutral-100 uppercase mb-8">Configuración del Sistema</h2>
