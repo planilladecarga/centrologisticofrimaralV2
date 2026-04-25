@@ -648,10 +648,6 @@ export default function DashboardInner() {
                 className="w-full p-3 bg-blue-600 text-white text-xs font-mono uppercase tracking-widest hover:bg-blue-700 transition-colors rounded-lg">
                 Iniciar Sesion
               </button>
-
-              <p className="text-[9px] font-mono text-neutral-400 text-center mt-4">
-                Default: admin / admin123
-              </p>
             </div>
           </div>
           <p className="mt-4 text-center text-[9px] font-mono uppercase tracking-widest text-neutral-400">Frimaral Centro Logistico v2.2</p>
