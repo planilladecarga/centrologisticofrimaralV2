@@ -32,7 +32,7 @@ const ORDERS_CACHE_KEY = 'frimaral_orders_v2';
 export default function DashboardInner() {
   const { showToast } = useToast();
   const { theme, toggleTheme } = useTheme();
-  const { role, canCreate, canDelete, canReset, canConfig } = useAuth();
+  const { role, setRole, canCreate, canDelete, canReset, canConfig } = useAuth();
   const { entries: auditEntries, logAction, clearLog } = useAuditLog();
   const INVENTORY_CACHE_KEY = 'frimaral_inventory_cache_v1';
   const ACTIVITY_CACHE_KEY = 'frimaral_activity_cache_v1';
@@ -1155,7 +1155,7 @@ export default function DashboardInner() {
                 <h3 className="text-xs font-mono uppercase tracking-widest text-neutral-900 dark:text-neutral-100 mb-4 border-b border-neutral-200 dark:border-neutral-700 pb-3">Rol de Acceso</h3>
                 <div className="flex flex-wrap gap-2">
                   {(['ADMIN', 'OPERADOR', 'LECTURA'] as const).map(r => (
-                    <button key={r} onClick={() => { const { setRole } = require('../contexts/AuthContext').useAuth(); setRole(r); }}
+                    <button key={r} onClick={() => setRole(r)}
                       className={`px-4 py-2 text-[11px] font-mono uppercase tracking-widest rounded-lg transition-colors ${
                         role === r ? 'bg-neutral-900 text-white dark:bg-neutral-100 dark:text-neutral-900' : 'bg-neutral-200 dark:bg-neutral-700 text-neutral-700 dark:text-neutral-300'
                       }`}>
