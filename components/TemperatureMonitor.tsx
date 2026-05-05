@@ -134,8 +134,9 @@ function ChartTooltipContent({ active, payload, label }: any) {
 // ──────────────────────────────────────────────
 async function parsePdfFile(file: File, onProgress: (msg: string) => void): Promise<Lectura[]> {
   const pdfjsLib = await import('pdfjs-dist');
-  // Disable worker to avoid build issues with static export
-  pdfjsLib.GlobalWorkerOptions.workerSrc = '';
+  // Use CDN worker for static export (GitHub Pages) — avoids path issues
+  pdfjsLib.GlobalWorkerOptions.workerSrc =
+    'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.9.155/pdf.worker.min.mjs';
 
   const arrayBuffer = await file.arrayBuffer();
   const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
