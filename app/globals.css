@@ -54,3 +54,33 @@
 /* Dark mode scrollbar */
 .dark ::-webkit-scrollbar-thumb { background: #525252; }
 .dark ::-webkit-scrollbar-thumb:hover { background: #737373; }
+
+/* Print styles */
+.print-hide { display: none !important; }
+
+@media print {
+  body {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+    background: white !important;
+    color: black !important;
+  }
+  .print-hide {
+    display: none !important;
+  }
+  .animate-fade-in,
+  .animate-toast-in,
+  .animate-pulse-soft,
+  .animate-progress,
+  .animate-shake,
+  .animate-modal-in,
+  .animate-slide-in-left {
+    animation: none !important;
+  }
+  button,
+  label,
+  input,
+  a[href^="http"] {
+    display: none !important;
+  }
+}
