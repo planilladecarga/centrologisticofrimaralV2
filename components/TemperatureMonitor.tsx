@@ -130,7 +130,8 @@ function ChartTooltipContent({ active, payload, label }: any) {
 }
 
 // ──────────────────────────────────────────────
-// PDF Parser — extract temperature rows from reporte_temperatura.pdf
+// PDF Parser — extract temperature rows from table-based PDFs
+// Uses text item Y coordinates to group items into rows
 // ──────────────────────────────────────────────
 async function parsePdfFile(file: File, onProgress: (msg: string) => void): Promise<Lectura[]> {
   const pdfjsLib = await import('pdfjs-dist');
@@ -140,6 +141,7 @@ async function parsePdfFile(file: File, onProgress: (msg: string) => void): Prom
   const arrayBuffer = await file.arrayBuffer();
   const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
   const allRows: Lectura[] = [];
+  const allExtractedLines: string[] = []; // for debug
 
   onProgress(`Procesando ${pdf.numPages} paginas...`);
 
@@ -147,34 +149,78 @@ async function parsePdfFile(file: File, onProgress: (msg: string) => void): Prom
     onProgress(`Leyendo pagina ${i} de ${pdf.numPages}...`);
     const page = await pdf.getPage(i);
     const textContent = await page.getTextContent();
-    const lines = textContent.items
-      .map((item: any) => item.str)
-      .join('|');
 
-    // Extract rows: pattern is SensorName DD/MM/YYYY HH:MM:SS -XX.X °C -XX.X °C
-    const regex = /(\S+)\s+(\d{2}\/\d{2}\/\d{4})\s+(\d{2}:\d{2}:\d{2})\s+(-?\d+[\.,]\d+)\s*°C/gi;
-    let match;
-    while ((match = regex.exec(lines)) !== null) {
-      const sensorRaw = match[1];
-      const fechaStr = match[2]; // DD/MM/YYYY
-      const horaStr = match[3]; // HH:MM:SS
-      const tempStr = match[4].replace(',', '.');
+    // Group text items by their Y position (same row ≈ same Y ± tolerance)
+    interface TextItem { str: string; x: number; y: number; }
+    const items: TextItem[] = textContent.items
+      .filter((item: any) => item.str && item.str.trim().length > 0)
+      .map((item: any) => ({
+        str: item.str.trim(),
+        x: Math.round((item as any).transform?.[4] ?? 0),
+        y: Math.round((item as any).transform?.[5] ?? 0),
+      }))
+      .sort((a, b) => b.y - a.y || a.x - b.x); // top-to-bottom, left-to-right
+
+    // Group into rows by Y proximity (tolerance: 3px)
+    const rowGroups: TextItem[][] = [];
+    for (const item of items) {
+      if (rowGroups.length > 0) {
+        const lastRow = rowGroups[rowGroups.length - 1];
+        const lastY = lastRow[0].y;
+        if (Math.abs(item.y - lastY) <= 3) {
+          lastRow.push(item);
+          continue;
+        }
+      }
+      rowGroups.push([item]);
+    }
+
+    // Sort items within each row by X position (left to right)
+    for (const row of rowGroups) {
+      row.sort((a, b) => a.x - b.x);
+    }
+
+    // Extract data from each row
+    for (const row of rowGroups) {
+      const fullText = row.map(r => r.str).join(' ');
+      allExtractedLines.push(fullText);
+
+      // Try to find a date pattern (DD/MM/YYYY or YYYY-MM-DD)
+      const dateMatch = fullText.match(/(\d{2}\/\d{2}\/\d{4}|\d{4}-\d{2}-\d{2})/);
+      // Try to find a time pattern (HH:MM:SS or HH:MM)
+      const timeMatch = fullText.match(/(\d{2}:\d{2}(?::\d{2})?)/);
+      // Try to find a temperature pattern (negative decimal, possibly with °C)
+      const tempMatches = fullText.match(/(-?\d+[\.,]\d+)\s*°?\s*C?/gi);
+
+      if (!dateMatch || !tempMatches) continue;
+
+      const fechaStr = dateMatch[1];
+      const horaStr = timeMatch ? timeMatch[1] : '00:00:00';
+      // Use the first temperature value found (or last one if multiple)
+      let tempStr = tempMatches[0].replace(/[°\s]/g, '').replace(/C$/i, '');
+      tempStr = tempStr.replace(',', '.');
 
       const temp = parseFloat(tempStr);
-      // Skip 0.00 readings (null/error values from sensor)
       if (isNaN(temp) || temp === 0) continue;
 
-      // Parse DD/MM/YYYY to ISO timestamp
-      const [day, month, year] = fechaStr.split('/').map(Number);
-      const [h, m, s] = horaStr.split(':').map(Number);
-      const dateObj = new Date(year, month - 1, day, h, m, s);
+      // Extract sensor name: first token or look for sensor/cam pattern
+      const sensorRaw = row[0]?.str || SENSOR_ID;
 
+      // Parse date
+      let dateObj: Date;
+      if (fechaStr.includes('/')) {
+        const [day, month, year] = fechaStr.split('/').map(Number);
+        const timeParts = horaStr.split(':').map(Number);
+        dateObj = new Date(year, month - 1, day, timeParts[0], timeParts[1], timeParts[2] || 0);
+      } else {
+        dateObj = new Date(fechaStr + 'T' + horaStr);
+      }
       if (isNaN(dateObj.getTime())) continue;
 
-      const sensorId = sensorRaw.replace(/sensor/i, 'CAM-').toUpperCase();
+      const sensorId = sensorRaw.replace(/sensor/i, 'CAM-').toUpperCase() || SENSOR_ID;
 
       allRows.push({
-        sensor: sensorId || SENSOR_ID,
+        sensor: sensorId,
         sensorNombre: SENSOR_NOMBRE,
         ubicacion: SENSOR_UBICACION,
         timestamp: dateObj.toISOString(),
@@ -183,6 +229,46 @@ async function parsePdfFile(file: File, onProgress: (msg: string) => void): Prom
         temperatura: temp,
       });
     }
+  }
+
+  // If no rows found with row-grouping, try the old flat-text approach as fallback
+  if (allRows.length === 0) {
+    onProgress('Reintentando con modo texto plano...');
+    const fullText = allExtractedLines.join(' | ');
+    const regex = /(\d{2}\/\d{2}\/\d{4})\s+(\d{2}:\d{2}(?::\d{2})?)\s+(-?\d+[\.,]\d+)/g;
+    let match;
+    while ((match = regex.exec(fullText)) !== null) {
+      const fechaStr = match[1];
+      const horaStr = match[2];
+      const tempStr = match[3].replace(',', '.');
+      const temp = parseFloat(tempStr);
+      if (isNaN(temp) || temp === 0) continue;
+
+      const [day, month, year] = fechaStr.split('/').map(Number);
+      const [h, m, s] = horaStr.split(':').map(Number);
+      const dateObj = new Date(year, month - 1, day, h, m, s || 0);
+      if (isNaN(dateObj.getTime())) continue;
+
+      allRows.push({
+        sensor: SENSOR_ID,
+        sensorNombre: SENSOR_NOMBRE,
+        ubicacion: SENSOR_UBICACION,
+        timestamp: dateObj.toISOString(),
+        fecha: dateObj.toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit', year: 'numeric' }),
+        hora: dateObj.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', hour12: false }),
+        temperatura: temp,
+      });
+    }
+  }
+
+  // If still no data, include sample extracted lines in error for debugging
+  if (allRows.length === 0) {
+    const sample = allExtractedLines.slice(0, 20).join('\n');
+    throw new Error(
+      `No se encontraron datos de temperatura en el archivo.\n\n` +
+      `Texto extraido (primeras 20 lineas):\n${sample}\n\n` +
+      `Formatos soportados: columnas con Fecha (DD/MM/YYYY), Hora (HH:MM), y Temperatura (negativa con decimal).`
+    );
   }
 
   // Sort by timestamp ascending
@@ -531,8 +617,9 @@ export default function TemperatureMonitor() {
             <span className="text-[10px] font-mono text-blue-600 animate-pulse">{uploadProgress}</span>
           )}
           {uploadError && (
-            <span className="text-[10px] font-mono text-red-600 flex items-center gap-1">
-              <AlertTriangle className="w-3 h-3" /> {uploadError}
+            <span className="text-[10px] font-mono text-red-600 flex items-start gap-1 max-w-full">
+              <AlertTriangle className="w-3 h-3 flex-shrink-0 mt-0.5" />
+              <span className="whitespace-pre-line break-all">{uploadError}</span>
             </span>
           )}
           {!uploading && mode === 'uploaded' && uploadProgress && (
