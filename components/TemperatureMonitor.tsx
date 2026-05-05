@@ -299,6 +299,7 @@ export default function TemperatureMonitor() {
   const [uploadProgress, setUploadProgress] = useState('');
   const [uploadError, setUploadError] = useState('');
   const [fileName, setFileName] = useState('');
+  const [chartReady, setChartReady] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Initialize with demo data
@@ -306,6 +307,14 @@ export default function TemperatureMonitor() {
     const demo = generateDemoData();
     setData(demo);
     setMode('demo');
+  }, []);
+
+  // Delay chart rendering until container has valid dimensions
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => {
+      setChartReady(true);
+    });
+    return () => cancelAnimationFrame(frame);
   }, []);
 
   // ─── File Upload Handler ────────────────
@@ -696,8 +705,8 @@ export default function TemperatureMonitor() {
               )}
             </div>
 
-            {filteredData.length > 0 ? (
-              <div className="h-64 md:h-80">
+            {filteredData.length > 0 && chartReady ? (
+              <div className="h-64 md:h-80" style={{ minWidth: 300, minHeight: 200 }}>
                 <ResponsiveContainer width="100%" height="100%">
                   <LineChart data={chartData} margin={{ top: 5, right: 10, left: 0, bottom: 5 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#e5e5e5" className="dark:opacity-30" />

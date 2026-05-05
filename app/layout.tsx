@@ -8,11 +8,6 @@ import { AuthProvider } from '../contexts/AuthContext';
 export const metadata: Metadata = {
   title: 'Frimaral - Centro Logístico',
   description: 'Sistema de gestión logística y control de inventario para Frimaral',
-  manifest: '/manifest.json',
-  icons: {
-    icon: '/favicon.ico',
-    apple: '/icon.png',
-  },
 };
 
 export default function RootLayout({children}: {children: React.ReactNode}) {
@@ -24,8 +19,11 @@ export default function RootLayout({children}: {children: React.ReactNode}) {
         <meta httpEquiv="Pragma" content="no-cache" />
         <meta httpEquiv="Expires" content="0" />
         <meta name="theme-color" content="#2563eb" />
-        <meta name="apple-mobile-web-app-capable" content="yes" />
+        <meta name="mobile-web-app-capable" content="yes" />
         <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+        <link rel="manifest" href="manifest.json" />
+        <link rel="icon" href="favicon.ico" />
+        <link rel="apple-touch-icon" href="icon.png" />
         <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
       </head>
       <body suppressHydrationWarning>

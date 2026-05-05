@@ -2,18 +2,18 @@
   "name": "Frimaral - Centro Logístico",
   "short_name": "Frimaral",
   "description": "Sistema de gestión logística y control de inventario",
-  "start_url": "/",
+  "start_url": ".",
   "display": "standalone",
   "background_color": "#ffffff",
   "theme_color": "#2563eb",
   "icons": [
     {
-      "src": "/favicon.ico",
+      "src": "favicon.ico",
       "sizes": "64x64 32x32 24x24 16x16",
       "type": "image/x-icon"
     },
     {
-      "src": "/icon.png",
+      "src": "icon.png",
       "sizes": "192x192",
       "type": "image/png"
     }
