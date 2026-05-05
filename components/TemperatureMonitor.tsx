@@ -302,6 +302,7 @@ export default function TemperatureMonitor() {
   const [fileName, setFileName] = useState('');
   const [chartReady, setChartReady] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const chartContainerRef = useRef<HTMLDivElement>(null);
 
   // Initialize with demo data
   useEffect(() => {
@@ -310,12 +311,35 @@ export default function TemperatureMonitor() {
     setMode('demo');
   }, []);
 
-  // Delay chart rendering until container has valid dimensions
+  // Render chart only when container has valid dimensions (fixes -1 width/height)
   useEffect(() => {
-    const frame = requestAnimationFrame(() => {
-      setChartReady(true);
-    });
-    return () => cancelAnimationFrame(frame);
+    const el = chartContainerRef.current;
+    if (!el) return;
+    let stopped = false;
+    const check = () => {
+      if (stopped) return;
+      const { width, height } = el.getBoundingClientRect();
+      if (width > 0 && height > 0) {
+        setChartReady(true);
+      } else {
+        requestAnimationFrame(check);
+      }
+    };
+    // ResizeObserver as primary, rAF as fallback
+    if (typeof ResizeObserver !== 'undefined') {
+      const ro = new ResizeObserver((entries) => {
+        for (const entry of entries) {
+          if (entry.contentRect.width > 0 && entry.contentRect.height > 0) {
+            setChartReady(true);
+          }
+        }
+      });
+      ro.observe(el);
+      return () => { stopped = true; ro.disconnect(); };
+    } else {
+      check();
+      return () => { stopped = true; };
+    }
   }, []);
 
   // ─── File Upload Handler ────────────────
@@ -540,7 +564,7 @@ export default function TemperatureMonitor() {
             ? 'bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-300 border-b border-green-200 dark:border-green-800'
             : 'bg-neutral-100 dark:bg-neutral-800 text-neutral-500 border-b border-neutral-200 dark:border-neutral-700'
       }`}>
-        <div className={`w-2 h-2 rounded-full ${
+        <span className={`w-2 h-2 rounded-full inline-block ${
           mode === 'demo' ? 'bg-amber-500' : mode === 'uploaded' ? 'bg-green-500' : 'bg-neutral-400'
         } animate-pulse`} />
         <span className="flex items-center gap-2">
@@ -706,8 +730,8 @@ export default function TemperatureMonitor() {
               )}
             </div>
 
-            {filteredData.length > 0 && chartReady ? (
-              <div className="h-64 md:h-80" style={{ minWidth: 300, minHeight: 200 }}>
+            <div ref={chartContainerRef} className="h-64 md:h-80">
+              {filteredData.length > 0 && chartReady ? (
                 <ResponsiveContainer width="100%" height="100%">
                   <LineChart data={chartData} margin={{ top: 5, right: 10, left: 0, bottom: 5 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#e5e5e5" className="dark:opacity-30" />
@@ -746,12 +770,12 @@ export default function TemperatureMonitor() {
                     />
                   </LineChart>
                 </ResponsiveContainer>
-              </div>
-            ) : (
-              <div className="h-48 flex items-center justify-center text-neutral-400">
-                <p className="text-sm font-mono uppercase tracking-widest">No hay datos para el rango seleccionado</p>
+              ) : (
+                <div className="h-full flex items-center justify-center text-neutral-400">
+                  <p className="text-sm font-mono uppercase tracking-widest">No hay datos para el rango seleccionado</p>
               </div>
             )}
+            </div>
           </div>
 
           {/* ─── Color Legend ──────────────── */}
