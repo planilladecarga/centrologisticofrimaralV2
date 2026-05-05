@@ -966,7 +966,19 @@ export default function TemperatureMonitor() {
               }
             </p>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-shrink-0">
+            <label className={`inline-flex items-center gap-2 px-4 py-2 rounded-lg text-[11px] font-mono uppercase tracking-wider transition-all cursor-pointer ${
+              uploading
+                ? 'bg-neutral-200 dark:bg-neutral-700 text-neutral-400 cursor-wait'
+                : 'bg-neutral-900 text-white dark:bg-neutral-100 dark:text-neutral-900 hover:bg-neutral-800 dark:hover:bg-neutral-200 shadow-sm'
+            }`}>
+              {uploading ? (
+                <><RefreshCw className="w-3.5 h-3.5 animate-spin" /> Procesando...</>
+              ) : (
+                <><Upload className="w-3.5 h-3.5" /> Subir PDF / Excel</>
+              )}
+              <input ref={fileInputRef} type="file" accept=".pdf,.xlsx,.xls,.csv" onChange={handleFileUpload} className="hidden" disabled={uploading} />
+            </label>
             <a href={TEMPERATURA_URL} target="_blank" rel="noopener noreferrer"
               className="px-3 py-1.5 text-[10px] font-mono uppercase tracking-widest bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors flex items-center gap-1.5">
               <ExternalLink className="w-3 h-3" />
@@ -974,6 +986,21 @@ export default function TemperatureMonitor() {
             </a>
           </div>
         </div>
+        {/* Upload progress / error */}
+        {uploading && (
+          <p className="text-[10px] font-mono text-blue-600 animate-pulse mt-2">{uploadProgress}</p>
+        )}
+        {uploadError && (
+          <p className="text-[10px] font-mono text-red-600 flex items-start gap-1 mt-2 whitespace-pre-line break-all">
+            <AlertTriangle className="w-3 h-3 flex-shrink-0 mt-0.5" />
+            {uploadError}
+          </p>
+        )}
+        {!uploading && mode === 'uploaded' && uploadProgress && (
+          <p className="text-[10px] font-mono text-green-600 flex items-center gap-1 mt-2">
+            <CheckCircle className="w-3 h-3" /> {uploadProgress}
+          </p>
+        )}
       </div>
 
       {/* ─── Tab Navigation ──────────────────── */}
@@ -996,40 +1023,11 @@ export default function TemperatureMonitor() {
         </div>
       </div>
 
-      {/* ─── Upload Section ──────────────────── */}
-      <div className="px-4 py-3 border-b border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 flex-shrink-0 print-hide">
-        <div className="flex flex-wrap items-center gap-3">
-          <label className={`inline-flex items-center gap-2 px-4 py-2 rounded-lg text-[11px] font-mono uppercase tracking-wider transition-all cursor-pointer ${
-            uploading
-              ? 'bg-neutral-200 dark:bg-neutral-700 text-neutral-400 cursor-wait'
-              : 'bg-neutral-900 text-white dark:bg-neutral-100 dark:text-neutral-900 hover:bg-neutral-800 dark:hover:bg-neutral-200 shadow-sm'
-          }`}>
-            {uploading ? (
-              <><RefreshCw className="w-3.5 h-3.5 animate-spin" /> Procesando...</>
-            ) : (
-              <><Upload className="w-3.5 h-3.5" /> Subir PDF / Excel</>
-            )}
-            <input ref={fileInputRef} type="file" accept=".pdf,.xlsx,.xls,.csv" onChange={handleFileUpload} className="hidden" disabled={uploading} />
-          </label>
-          <span className="text-[10px] font-mono text-neutral-400 hidden sm:inline">Formatos: .PDF .XLSX .XLS .CSV</span>
-
-          {uploading && <span className="text-[10px] font-mono text-blue-600 animate-pulse">{uploadProgress}</span>}
-          {uploadError && (
-            <span className="text-[10px] font-mono text-red-600 flex items-start gap-1 max-w-full">
-              <AlertTriangle className="w-3 h-3 flex-shrink-0 mt-0.5" />
-              <span className="whitespace-pre-line break-all">{uploadError}</span>
-            </span>
-          )}
-          {!uploading && mode === 'uploaded' && uploadProgress && (
-            <span className="text-[10px] font-mono text-green-600 flex items-center gap-1">
-              <CheckCircle className="w-3 h-3" /> {uploadProgress}
-            </span>
-          )}
-
-          {/* Quick export buttons */}
+      {/* ─── Quick Export + Clear ──────────────── */}
+      <div className="px-4 py-2 border-b border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 flex-shrink-0 print-hide">
+        <div className="flex flex-wrap items-center gap-2">
           {filteredData.length > 0 && (
             <>
-              <div className="hidden md:block w-px h-6 bg-neutral-300 dark:bg-neutral-600" />
               <button onClick={handleExportExcel}
                 className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[10px] font-mono uppercase tracking-wider bg-green-600 text-white hover:bg-green-700 transition-colors shadow-sm">
                 <FileSpreadsheet className="w-3.5 h-3.5" /> <span className="hidden sm:inline">Exportar</span> Excel
@@ -1038,13 +1036,14 @@ export default function TemperatureMonitor() {
                 className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[10px] font-mono uppercase tracking-wider bg-red-600 text-white hover:bg-red-700 transition-colors shadow-sm">
                 <Download className="w-3.5 h-3.5" /> <span className="hidden sm:inline">Exportar</span> PDF
               </button>
+              <div className="w-px h-5 bg-neutral-200 dark:bg-neutral-700" />
             </>
           )}
-
+          <span className="text-[10px] font-mono text-neutral-400">Formatos: .PDF .XLSX .XLS .CSV</span>
           {mode === 'uploaded' && !uploading && (
             <button onClick={clearData}
               className="ml-auto px-3 py-1.5 text-[10px] font-mono uppercase tracking-widest text-neutral-500 hover:text-red-600 transition-colors flex items-center gap-1.5">
-              <X className="w-3 h-3" /> Limpiar
+              <X className="w-3 h-3" /> Limpiar datos
             </button>
           )}
         </div>
