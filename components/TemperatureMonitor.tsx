@@ -9,7 +9,7 @@ import {
   Calendar, X, ChevronLeft, ChevronRight,
 } from 'lucide-react';
 import {
-  ResponsiveContainer, LineChart, Line, XAxis, YAxis,
+  LineChart, Line, XAxis, YAxis,
   CartesianGrid, Tooltip, ReferenceLine,
 } from 'recharts';
 
@@ -134,9 +134,8 @@ function ChartTooltipContent({ active, payload, label }: any) {
 // ──────────────────────────────────────────────
 async function parsePdfFile(file: File, onProgress: (msg: string) => void): Promise<Lectura[]> {
   const pdfjsLib = await import('pdfjs-dist');
-  // Use CDN worker for static export (GitHub Pages) — avoids path issues
-  pdfjsLib.GlobalWorkerOptions.workerSrc =
-    'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.9.155/pdf.worker.min.mjs';
+  // Use local worker (copied to public/) to always match the installed pdfjs-dist version
+  pdfjsLib.GlobalWorkerOptions.workerSrc = 'pdf.worker.min.mjs';
 
   const arrayBuffer = await file.arrayBuffer();
   const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
@@ -300,7 +299,7 @@ export default function TemperatureMonitor() {
   const [uploadProgress, setUploadProgress] = useState('');
   const [uploadError, setUploadError] = useState('');
   const [fileName, setFileName] = useState('');
-  const [chartReady, setChartReady] = useState(false);
+  const [chartDimensions, setChartDimensions] = useState<{ width: number; height: number } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const chartContainerRef = useRef<HTMLDivElement>(null);
 
@@ -311,35 +310,31 @@ export default function TemperatureMonitor() {
     setMode('demo');
   }, []);
 
-  // Render chart only when container has valid dimensions (fixes -1 width/height)
+  // Measure container dimensions and pass explicit width/height to chart
+  // (ResponsiveContainer can report -1 when the parent tab just became visible)
   useEffect(() => {
     const el = chartContainerRef.current;
     if (!el) return;
-    let stopped = false;
-    const check = () => {
-      if (stopped) return;
+    let rafId = 0;
+    const measure = () => {
       const { width, height } = el.getBoundingClientRect();
-      if (width > 0 && height > 0) {
-        setChartReady(true);
+      if (width > 10 && height > 10) {
+        setChartDimensions({ width, height });
       } else {
-        requestAnimationFrame(check);
+        rafId = requestAnimationFrame(measure);
       }
     };
-    // ResizeObserver as primary, rAF as fallback
-    if (typeof ResizeObserver !== 'undefined') {
-      const ro = new ResizeObserver((entries) => {
-        for (const entry of entries) {
-          if (entry.contentRect.width > 0 && entry.contentRect.height > 0) {
-            setChartReady(true);
-          }
+    measure();
+    const ro = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const { width, height } = entry.contentRect;
+        if (width > 10 && height > 10) {
+          setChartDimensions({ width, height });
         }
-      });
-      ro.observe(el);
-      return () => { stopped = true; ro.disconnect(); };
-    } else {
-      check();
-      return () => { stopped = true; };
-    }
+      }
+    });
+    ro.observe(el);
+    return () => { cancelAnimationFrame(rafId); ro.disconnect(); };
   }, []);
 
   // ─── File Upload Handler ────────────────
@@ -731,45 +726,43 @@ export default function TemperatureMonitor() {
             </div>
 
             <div ref={chartContainerRef} className="h-64 md:h-80">
-              {filteredData.length > 0 && chartReady ? (
-                <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={chartData} margin={{ top: 5, right: 10, left: 0, bottom: 5 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#e5e5e5" className="dark:opacity-30" />
-                    <XAxis
-                      dataKey="name"
-                      tick={{ fontSize: 9, fontFamily: 'ui-monospace, monospace' }}
-                      tickLine={false}
-                      axisLine={{ stroke: '#d4d4d4' }}
-                      interval="preserveStartEnd"
-                      angle={-30}
-                      textAnchor="end"
-                      height={50}
-                    />
-                    <YAxis
-                      domain={yDomain}
-                      tick={{ fontSize: 10, fontFamily: 'ui-monospace, monospace' }}
-                      tickLine={false}
-                      axisLine={{ stroke: '#d4d4d4' }}
-                      tickFormatter={(v: number) => `${v}°`}
-                    />
-                    <Tooltip content={<ChartTooltipContent />} />
-                    <ReferenceLine y={-18} stroke="#ef4444" strokeDasharray="6 4" strokeWidth={1.5}
-                      label={{ value: '-18°C Alerta Calor', position: 'insideTopRight', fill: '#ef4444', fontSize: 10, fontFamily: 'ui-monospace, monospace' }}
-                    />
-                    <ReferenceLine y={-24} stroke="#3b82f6" strokeDasharray="6 4" strokeWidth={1.5}
-                      label={{ value: '-24°C Alerta Frio', position: 'insideBottomRight', fill: '#3b82f6', fontSize: 10, fontFamily: 'ui-monospace, monospace' }}
-                    />
-                    <Line
-                      type="monotone"
-                      dataKey="temp"
-                      stroke="#16a34a"
-                      strokeWidth={filteredData.length > 200 ? 1.5 : 2}
-                      dot={false}
-                      activeDot={{ r: 4, strokeWidth: 2, fill: '#fff' }}
-                      animationDuration={800}
-                    />
-                  </LineChart>
-                </ResponsiveContainer>
+              {filteredData.length > 0 && chartDimensions ? (
+                <LineChart data={chartData} width={chartDimensions.width} height={chartDimensions.height} margin={{ top: 5, right: 10, left: 0, bottom: 5 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#e5e5e5" className="dark:opacity-30" />
+                  <XAxis
+                    dataKey="name"
+                    tick={{ fontSize: 9, fontFamily: 'ui-monospace, monospace' }}
+                    tickLine={false}
+                    axisLine={{ stroke: '#d4d4d4' }}
+                    interval="preserveStartEnd"
+                    angle={-30}
+                    textAnchor="end"
+                    height={50}
+                  />
+                  <YAxis
+                    domain={yDomain}
+                    tick={{ fontSize: 10, fontFamily: 'ui-monospace, monospace' }}
+                    tickLine={false}
+                    axisLine={{ stroke: '#d4d4d4' }}
+                    tickFormatter={(v: number) => `${v}°`}
+                  />
+                  <Tooltip content={<ChartTooltipContent />} />
+                  <ReferenceLine y={-18} stroke="#ef4444" strokeDasharray="6 4" strokeWidth={1.5}
+                    label={{ value: '-18°C Alerta Calor', position: 'insideTopRight', fill: '#ef4444', fontSize: 10, fontFamily: 'ui-monospace, monospace' }}
+                  />
+                  <ReferenceLine y={-24} stroke="#3b82f6" strokeDasharray="6 4" strokeWidth={1.5}
+                    label={{ value: '-24°C Alerta Frio', position: 'insideBottomRight', fill: '#3b82f6', fontSize: 10, fontFamily: 'ui-monospace, monospace' }}
+                  />
+                  <Line
+                    type="monotone"
+                    dataKey="temp"
+                    stroke="#16a34a"
+                    strokeWidth={filteredData.length > 200 ? 1.5 : 2}
+                    dot={false}
+                    activeDot={{ r: 4, strokeWidth: 2, fill: '#fff' }}
+                    animationDuration={800}
+                  />
+                </LineChart>
               ) : (
                 <div className="h-full flex items-center justify-center text-neutral-400">
                   <p className="text-sm font-mono uppercase tracking-widest">No hay datos para el rango seleccionado</p>
